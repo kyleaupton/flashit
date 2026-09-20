@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/kyleaupton/flashit/internal/drives"
 	"github.com/kyleaupton/flashit/internal/logger"
 	windowsclient "github.com/kyleaupton/flashit/internal/priv/windows"
 )
@@ -77,6 +78,11 @@ func (d *windowsDiskOps) FormatDisk(ctx context.Context, device string, filesyst
 	return d.client.FormatDisk(ctx, device, filesystem, volumeName)
 }
 
+// Eject needs no elevation on Windows; the drives package does it as the user.
+func (d *windowsDiskOps) Eject(ctx context.Context, device string) error {
+	return drives.Eject(ctx, device)
+}
+
 // windowsDiskOpsFallback is used when the helper is not available.
 // These operations will fail since raw disk access requires elevation.
 type windowsDiskOpsFallback struct{}
@@ -86,5 +92,9 @@ func (d windowsDiskOpsFallback) WriteISO(ctx context.Context, isoPath string, de
 }
 
 func (d windowsDiskOpsFallback) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
+	return windowsclient.ErrHelperNotRunning
+}
+
+func (d windowsDiskOpsFallback) Eject(context.Context, string) error {
 	return windowsclient.ErrHelperNotRunning
 }

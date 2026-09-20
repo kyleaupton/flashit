@@ -5,9 +5,11 @@ package priv
 import (
 	"context"
 	"errors"
+	"sync"
+
+	"github.com/kyleaupton/flashit/internal/drives"
 	"github.com/kyleaupton/flashit/internal/logger"
 	macosclient "github.com/kyleaupton/flashit/internal/priv/macos"
-	"sync"
 )
 
 type darwinService struct {
@@ -65,6 +67,11 @@ func (d darwinDiskOps) FormatDisk(ctx context.Context, device string, filesystem
 	return errors.New("FormatDisk requires the privileged helper to be installed")
 }
 
+// Eject needs no privilege on macOS; diskutil does it as the user.
+func (d darwinDiskOps) Eject(ctx context.Context, device string) error {
+	return drives.Eject(ctx, device)
+}
+
 // darwinDiskOpsXPC uses the privileged XPC helper for disk operations.
 type darwinDiskOpsXPC struct{ client macosclient.Client }
 
@@ -81,4 +88,8 @@ func (d *darwinDiskOpsXPC) WriteISO(ctx context.Context, isoPath string, device 
 
 func (d *darwinDiskOpsXPC) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
 	return d.client.FormatDisk(ctx, device, filesystem, volumeName)
+}
+
+func (d *darwinDiskOpsXPC) Eject(ctx context.Context, device string) error {
+	return drives.Eject(ctx, device)
 }
