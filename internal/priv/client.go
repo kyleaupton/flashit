@@ -117,6 +117,15 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, progress Progr
 		return proto.Response{}, err
 	}
 	if err := c.send(req); err != nil {
+		// The write can fail before the read loop has recorded why the
+		// helper hung up; let it catch up so the caller sees that reason.
+		select {
+		case <-c.done:
+		case <-time.After(time.Second):
+		}
+		if cerr := c.readError(); cerr != nil {
+			return proto.Response{}, cerr
+		}
 		return proto.Response{}, err
 	}
 
@@ -191,6 +200,17 @@ func (c *Client) readLoop() {
 			c.conn.Close()
 			return
 		}
+		// Refusals the helper writes before any request has an ID (busy,
+		// unauthorized, malformed) end the session; surface them as the
+		// connection error so every waiter sees the real code.
+		if resp.ID == "" {
+			if pe := resp.Err(); pe != nil {
+				c.fail(fmt.Errorf("helper refused the connection: %w", pe))
+				c.conn.Close()
+				return
+			}
+			continue
+		}
 		c.mu.Lock()
 		ch := c.pending[resp.ID]
 		c.mu.Unlock()
@@ -203,6 +223,9 @@ func (c *Client) readLoop() {
 func (c *Client) fail(err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.readErr != nil {
+		return
+	}
 	c.readErr = err
 	for id, ch := range c.pending {
 		close(ch)
@@ -210,11 +233,15 @@ func (c *Client) fail(err error) {
 	}
 }
 
-func (c *Client) connError() error {
+func (c *Client) readError() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.readErr != nil {
-		return c.readErr
+	return c.readErr
+}
+
+func (c *Client) connError() error {
+	if err := c.readError(); err != nil {
+		return err
 	}
 	return errors.New("helper connection closed")
 }

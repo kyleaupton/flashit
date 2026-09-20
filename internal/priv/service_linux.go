@@ -4,6 +4,7 @@ package priv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,7 +24,9 @@ func platformService() PrivilegedService { return &linuxService{} }
 
 // EnsureReady reuses a live helper and otherwise spawns one, which raises the
 // polkit prompt. The helper exits on idle, so a stale client is expected
-// between jobs and simply replaced.
+// between jobs and simply replaced. A released helper that has not exited
+// yet blocks a new spawn: the app cannot kill root, so it must not stack a
+// second one.
 func (s *linuxService) EnsureReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -36,10 +39,19 @@ func (s *linuxService) EnsureReady(ctx context.Context) error {
 			return nil
 		}
 		logger.Debug("helper gone, respawning", "error", err)
-		s.teardown()
+		s.dropClient()
+	}
+	if s.proc != nil {
+		if s.proc.alive() {
+			return errors.New("the previous privileged helper is still shutting down; try again in a moment")
+		}
+		s.proc = nil
 	}
 
 	proc, err := spawnHelper(ctx)
+	if proc != nil {
+		s.proc = proc
+	}
 	if err != nil {
 		return fmt.Errorf("start privileged helper: %w", err)
 	}
@@ -47,7 +59,7 @@ func (s *linuxService) EnsureReady(ctx context.Context) error {
 	info, err := client.Ping(ctx)
 	if err != nil {
 		client.Close()
-		proc.close()
+		proc.release()
 		return fmt.Errorf("helper handshake: %w", err)
 	}
 	logger.Info("privileged helper ready", "version", info.Version, "protocol", info.Protocol)
@@ -68,18 +80,19 @@ func (s *linuxService) Disk() DiskOps {
 func (s *linuxService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.teardown()
+	s.dropClient()
 	return nil
 }
 
-func (s *linuxService) teardown() {
+// dropClient closes the session and releases the helper; proc stays set
+// until it has actually exited.
+func (s *linuxService) dropClient() {
 	if s.client != nil {
 		s.client.Close()
 		s.client = nil
 	}
 	if s.proc != nil {
-		s.proc.close()
-		s.proc = nil
+		s.proc.release()
 	}
 }
 

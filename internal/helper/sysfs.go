@@ -30,10 +30,19 @@ func isSystemMount(mp string) bool {
 type mount struct {
 	majMin     string
 	mountpoint string
+	source     string
+}
+
+// sysfs is where the walk looks things up; tests point it at a fake tree.
+type sysfs struct {
+	devBlock   string
+	classBlock string
+	resolve    func(string) (string, error)
 }
 
 // parseMountInfo reads /proc/self/mountinfo lines: field 3 is major:minor,
-// field 5 the mountpoint.
+// field 5 the mountpoint, and the mount source follows the "-" separator
+// and the filesystem type.
 func parseMountInfo(r io.Reader) ([]mount, error) {
 	var out []mount
 	sc := bufio.NewScanner(r)
@@ -42,7 +51,14 @@ func parseMountInfo(r io.Reader) ([]mount, error) {
 		if len(fields) < 5 {
 			continue
 		}
-		out = append(out, mount{majMin: fields[2], mountpoint: unescapeMount(fields[4])})
+		m := mount{majMin: fields[2], mountpoint: unescapeMount(fields[4])}
+		for i := 6; i+2 < len(fields); i++ {
+			if fields[i] == "-" {
+				m.source = unescapeMount(fields[i+2])
+				break
+			}
+		}
+		out = append(out, m)
 	}
 	return out, sc.Err()
 }
@@ -70,7 +86,7 @@ func unescapeMount(s string) string {
 // systemDisksFrom resolves every system mount to the whole disks behind it.
 // "/" must resolve or the result is an error, so an unknown root refuses
 // everything rather than guessing.
-func systemDisksFrom(mounts []mount, sysDevBlock string) ([]string, error) {
+func systemDisksFrom(mounts []mount, sys sysfs) ([]string, error) {
 	seen := map[string]bool{}
 	var disks []string
 	rootFound := false
@@ -78,7 +94,7 @@ func systemDisksFrom(mounts []mount, sysDevBlock string) ([]string, error) {
 		if !isSystemMount(m.mountpoint) {
 			continue
 		}
-		sysPath, err := filepath.EvalSymlinks(filepath.Join(sysDevBlock, m.majMin))
+		sysPath, err := sys.entryFor(m)
 		if err == nil {
 			var wholes []string
 			wholes, err = wholeDisksForSysPath(sysPath, 0)
@@ -103,6 +119,24 @@ func systemDisksFrom(mounts []mount, sysDevBlock string) ([]string, error) {
 	}
 	sort.Strings(disks)
 	return disks, nil
+}
+
+// entryFor finds the sysfs block entry behind a mount. btrfs, ZFS and
+// overlay roots report an anonymous major 0, so for those the mount source
+// is used instead when it names a device node; anything else stays
+// unresolved.
+func (sys sysfs) entryFor(m mount) (string, error) {
+	if !strings.HasPrefix(m.majMin, "0:") {
+		return filepath.EvalSymlinks(filepath.Join(sys.devBlock, m.majMin))
+	}
+	if !strings.HasPrefix(m.source, "/dev/") {
+		return "", fmt.Errorf("%s is not backed by a block device (%s)", m.mountpoint, m.source)
+	}
+	dev, err := sys.resolve(m.source)
+	if err != nil {
+		return "", err
+	}
+	return filepath.EvalSymlinks(filepath.Join(sys.classBlock, filepath.Base(dev)))
 }
 
 // wholeDisksForSysPath follows a resolved sysfs block entry through its

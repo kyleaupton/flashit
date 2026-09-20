@@ -91,11 +91,13 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		case <-idle.C:
 			return ErrIdle
 		case c := <-conns:
-			if err := s.auth.Authenticate(c); err != nil {
+			peer, err := s.auth.Authenticate(c)
+			if err != nil {
 				s.opts.Logger.Warn("rejected connection", "error", err)
 				s.refuse(c, proto.NewError(proto.CodeUnauthorized, "caller is not authorized"))
 				continue
 			}
+			s.opts.Logger.Info("client connected", "uid", peer.UID)
 			idle.Stop()
 			go func() {
 				for {
@@ -108,7 +110,7 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 					}
 				}
 			}()
-			return s.ServeConn(ctx, c)
+			return s.ServeConn(ctx, c, peer)
 		}
 	}
 }
@@ -119,15 +121,16 @@ func (s *Server) refuse(c net.Conn, err *proto.Error) {
 	c.Close()
 }
 
-// ServeConn serves an already authenticated connection.
-func (s *Server) ServeConn(ctx context.Context, conn net.Conn) error {
-	sess := &session{s: s, conn: conn}
+// ServeConn serves an already authenticated connection on behalf of peer.
+func (s *Server) ServeConn(ctx context.Context, conn net.Conn, peer Peer) error {
+	sess := &session{s: s, conn: conn, peer: peer}
 	return sess.serve(ctx)
 }
 
 type session struct {
 	s    *Server
 	conn net.Conn
+	peer Peer
 
 	wmu sync.Mutex
 
@@ -188,7 +191,7 @@ func (sess *session) serve(parent context.Context) error {
 }
 
 // armIdle restarts the idle timer when nothing is running. Called after every
-// request and after every op completes.
+// control request; an op re-arms it itself under the lock when it finishes.
 func (sess *session) armIdle() {
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -255,6 +258,9 @@ func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn b
 	}
 	opCtx, cancel := context.WithCancel(ctx)
 	sess.inflight = cancel
+	// Stopped under the same lock that marks the op running, so a previous
+	// op's completion can never re-arm the timer over this one.
+	sess.idle.Stop()
 	sess.mu.Unlock()
 
 	sess.ops.Add(1)
@@ -275,15 +281,15 @@ func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn b
 			}
 		}
 
-		// Clear inflight under the write lock so the next op cannot start,
-		// and write, before this result reaches the wire.
+		// Clear inflight and re-arm idle under the write lock so the next op
+		// cannot start, and write, before this result reaches the wire.
 		sess.wmu.Lock()
 		sess.mu.Lock()
 		sess.inflight = nil
+		sess.idle.Reset(sess.s.opts.IdleTimeout)
 		sess.mu.Unlock()
 		sess.writeLocked(resp)
 		sess.wmu.Unlock()
-		sess.armIdle()
 	}()
 	return false
 }

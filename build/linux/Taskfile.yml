@@ -76,6 +76,7 @@ tasks:
             ref: .OBFUSCATED
       - task: common:generate:icons
       - task: generate:dotdesktop
+      - task: build:helper
     preconditions:
       - sh: docker info > /dev/null 2>&1
         msg: "Docker is required for cross-compilation to Linux. Please install Docker."

@@ -107,7 +107,7 @@ func (d *linuxDisk) SystemDisks() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	return systemDisksFrom(mounts, sysDevBlock)
+	return systemDisksFrom(mounts, sysfs{devBlock: sysDevBlock, classBlock: sysClassBlock, resolve: filepath.EvalSymlinks})
 }
 
 func readMountInfo() ([]mount, error) {
@@ -208,11 +208,32 @@ func (d *linuxDisk) Format(ctx context.Context, device, fs, label string) (strin
 	if err := os.MkdirAll(mountpoint, 0o755); err != nil {
 		return "", err
 	}
+	// Only the helper populates MountRoot, so anything mounted here is a
+	// leftover of ours and can go; if it will not, the device is busy.
+	if isMountpoint(mountpoint) {
+		d.log.Info("unmounting stale mount", "mountpoint", mountpoint)
+		if err := unix.Unmount(mountpoint, 0); err != nil {
+			return "", fmt.Errorf("unmount stale %s: %w", mountpoint, unix.EBUSY)
+		}
+	}
 	opts := fmt.Sprintf("uid=%d,gid=%d", d.uid, d.gid)
 	if err := unix.Mount(part, mountpoint, "vfat", unix.MS_NOSUID|unix.MS_NODEV|unix.MS_NOEXEC, opts); err != nil {
 		return "", fmt.Errorf("mount %s at %s: %w", part, mountpoint, err)
 	}
 	return mountpoint, nil
+}
+
+// isMountpoint reports whether path sits on a different device than its
+// parent directory.
+func isMountpoint(path string) bool {
+	var self, parent unix.Stat_t
+	if err := unix.Stat(path, &self); err != nil {
+		return false
+	}
+	if err := unix.Stat(filepath.Dir(path), &parent); err != nil {
+		return false
+	}
+	return self.Dev != parent.Dev
 }
 
 func waitForPath(ctx context.Context, path string, timeout time.Duration) error {

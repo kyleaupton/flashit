@@ -45,9 +45,15 @@ type Disk interface {
 	Eject(device string) error
 }
 
+// Peer is what caller authentication learned about the connected process.
+// Ops use it to refuse sources the caller could not read on their own.
+type Peer struct {
+	UID int
+}
+
 // Auth decides whether the process on the other end of conn is the app.
 type Auth interface {
-	Authenticate(conn net.Conn) error
+	Authenticate(conn net.Conn) (Peer, error)
 }
 
 var (

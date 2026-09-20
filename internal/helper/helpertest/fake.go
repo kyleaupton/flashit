@@ -184,12 +184,18 @@ func (r *FakeRaw) Bytes() []byte {
 	return bytes.Clone(r.Buf.Bytes())
 }
 
-// FakeAuth accepts every connection unless Err is set.
+// FakeAuth accepts every connection as UID unless Err is set.
 type FakeAuth struct {
 	Err error
+	UID int
 }
 
-func (a FakeAuth) Authenticate(net.Conn) error { return a.Err }
+func (a FakeAuth) Authenticate(net.Conn) (helper.Peer, error) {
+	if a.Err != nil {
+		return helper.Peer{}, a.Err
+	}
+	return helper.Peer{UID: a.UID}, nil
+}
 
 // PipeListener is a net.Listener over net.Pipe for tests of the accept loop.
 type PipeListener struct {

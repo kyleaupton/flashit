@@ -95,6 +95,6 @@ func (d windowsDiskOpsFallback) FormatDisk(ctx context.Context, device string, f
 	return windowsclient.ErrHelperNotRunning
 }
 
-func (d windowsDiskOpsFallback) Eject(context.Context, string) error {
-	return windowsclient.ErrHelperNotRunning
+func (d windowsDiskOpsFallback) Eject(ctx context.Context, device string) error {
+	return drives.Eject(ctx, device)
 }

@@ -25,7 +25,7 @@ func connect(t *testing.T, disk *helpertest.FakeDisk) (*Client, <-chan error) {
 	})
 	cc, sc := net.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- srv.ServeConn(context.Background(), sc) }()
+	go func() { done <- srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
 	t.Cleanup(func() { c.Close() })
 	return c, done
@@ -277,7 +277,7 @@ func TestClientHelperGoesAway(t *testing.T) {
 	srv := helper.New(disk, helpertest.FakeAuth{}, helper.Options{WriteBufferSize: 1024})
 	cc, sc := net.Pipe()
 	serveCtx, stopServer := context.WithCancel(context.Background())
-	go func() { _ = srv.ServeConn(serveCtx, sc) }()
+	go func() { _ = srv.ServeConn(serveCtx, sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
 	defer c.Close()
 	ctx := ctxTimeout(t)
@@ -308,4 +308,36 @@ func TestClientHelperGoesAway(t *testing.T) {
 	if _, err := c.Ping(ctx); err == nil {
 		t.Fatal("ping succeeded on a dead connection")
 	}
+}
+
+func TestClientSurfacesConnectionRefusals(t *testing.T) {
+	ln := helpertest.NewPipeListener()
+	defer ln.Close()
+	srv := helper.New(helpertest.NewFakeDisk(), helpertest.FakeAuth{UID: os.Getuid()}, helper.Options{})
+	go func() { _ = srv.Serve(context.Background(), ln) }()
+
+	first := NewClient(ln.Dial())
+	defer first.Close()
+	if _, err := first.Ping(ctxTimeout(t)); err != nil {
+		t.Fatal(err)
+	}
+
+	second := NewClient(ln.Dial())
+	defer second.Close()
+	_, err := second.Ping(ctxTimeout(t))
+	wantCode(t, err, proto.CodeBusy)
+	// Every later call on that client reports the same refusal.
+	wantCode(t, second.Eject(ctxTimeout(t), helpertest.Removable), proto.CodeBusy)
+}
+
+func TestClientSurfacesUnauthorized(t *testing.T) {
+	ln := helpertest.NewPipeListener()
+	defer ln.Close()
+	srv := helper.New(helpertest.NewFakeDisk(), helpertest.FakeAuth{Err: helper.ErrUnauthorized}, helper.Options{IdleTimeout: time.Second})
+	go func() { _ = srv.Serve(context.Background(), ln) }()
+
+	c := NewClient(ln.Dial())
+	defer c.Close()
+	_, err := c.Ping(ctxTimeout(t))
+	wantCode(t, err, proto.CodeUnauthorized)
 }

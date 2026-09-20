@@ -5,9 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -36,7 +39,7 @@ func serve(t *testing.T, disk helper.Disk, opts helper.Options) *client {
 	srv := helper.New(disk, helpertest.FakeAuth{}, opts)
 	cc, sc := net.Pipe()
 	done := make(chan error, 1)
-	go func() { done <- srv.ServeConn(context.Background(), sc) }()
+	go func() { done <- srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid()}) }()
 	_ = cc.SetDeadline(time.Now().Add(testTimeout))
 	t.Cleanup(func() { cc.Close() })
 	return &client{t: t, conn: cc, r: bufio.NewReader(cc), done: done}
@@ -466,6 +469,9 @@ func TestFormatDiskRefusals(t *testing.T) {
 		{"format fails", proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X"}, func(d *helpertest.FakeDisk) {
 			d.FormatErr = errors.New("parted exit 1")
 		}, proto.CodeInternal},
+		{"mountpoint held", proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X"}, func(d *helpertest.FakeDisk) {
+			d.FormatErr = fmt.Errorf("unmount stale mount: %w", syscall.EBUSY)
+		}, proto.CodeDeviceBusy},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -477,7 +483,7 @@ func TestFormatDiskRefusals(t *testing.T) {
 			c.ping()
 			_, resp := c.call("1", proto.OpFormatDisk, tc.params)
 			wantError(t, resp, tc.want)
-			if tc.want != proto.CodeInternal && len(disk.Formats) != 0 {
+			if tc.want != proto.CodeInternal && tc.want != proto.CodeDeviceBusy && len(disk.Formats) != 0 {
 				t.Fatalf("refused op formatted anyway: %+v", disk.Formats)
 			}
 		})
@@ -711,4 +717,79 @@ func TestServeStopsOnContext(t *testing.T) {
 		t.Fatal("Serve ignored context cancellation")
 	}
 	c.expectClosed()
+}
+
+// The helper runs as root; a source the caller does not own must be refused
+// before anything about it (including its size) is revealed.
+func TestWriteImageRefusesSourceNotOwnedByCaller(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	srv := helper.New(disk, helpertest.FakeAuth{}, testOptions())
+	cc, sc := net.Pipe()
+	go func() { _ = srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid() + 1}) }()
+	_ = cc.SetDeadline(time.Now().Add(testTimeout))
+	t.Cleanup(func() { cc.Close() })
+	c := &client{t: t, conn: cc, r: bufio.NewReader(cc)}
+	c.ping()
+
+	const size = 4096
+	src := sourceFile(t, size)
+	for _, claimed := range []int64{size, size - 1} {
+		_, resp := c.call("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: claimed})
+		wantError(t, resp, proto.CodeInvalidSource)
+		if strings.Contains(resp.Message, strconv.Itoa(size)) {
+			t.Fatalf("message leaks the size: %q", resp.Message)
+		}
+	}
+	if disk.Raw != nil {
+		t.Fatal("device was opened for a refused source")
+	}
+}
+
+func TestWriteImageSizeMismatchHidesSize(t *testing.T) {
+	c := serve(t, helpertest.NewFakeDisk(), testOptions())
+	c.ping()
+	const size = 4096
+	src := sourceFile(t, size)
+	_, resp := c.call("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size + 1})
+	wantError(t, resp, proto.CodeSizeMismatch)
+	if strings.Contains(resp.Message, strconv.Itoa(size)) {
+		t.Fatalf("message leaks the size: %q", resp.Message)
+	}
+}
+
+// A finishing op must not re-arm the idle timer over the op that starts right
+// after it: op B outlives the idle timeout several times over and must not be
+// cut off.
+func TestIdleTimerNotRearmedByPreviousOp(t *testing.T) {
+	opts := testOptions()
+	opts.IdleTimeout = 30 * time.Millisecond
+	const size = 4096
+	src := sourceFile(t, size)
+
+	for i := 0; i < 20; i++ {
+		disk := helpertest.NewFakeDisk()
+		c := serve(t, disk, opts)
+		c.ping()
+
+		_, resp := c.call("a", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+		wantResult(t, resp)
+
+		disk.Raw = &helpertest.FakeRaw{Started: make(chan struct{}), Block: make(chan struct{})}
+		c.send("b", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+		<-disk.Raw.Started
+		time.Sleep(4 * opts.IdleTimeout)
+		close(disk.Raw.Block)
+		for {
+			resp := c.recv()
+			if resp.Type == proto.TypeProgress {
+				continue
+			}
+			wantResult(t, resp)
+			break
+		}
+		c.conn.Close()
+		if err := c.wait(); err != nil {
+			t.Fatalf("iteration %d: server returned %v", i, err)
+		}
+	}
 }

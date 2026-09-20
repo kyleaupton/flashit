@@ -137,7 +137,8 @@ On Linux the helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block
 nodes, non-removable disks (sysfs `removable` or a USB ancestor), any whole
 disk backing `/`, `/boot`, `/home` and friends (resolved through dm/md slaves,
-fail closed), sources that are not regular files of the claimed size, images
+fail closed; btrfs and ZFS roots resolved through the mount source), sources
+that are not regular files owned by the caller with the claimed size, images
 larger than the device, and labels outside `^[A-Za-z0-9_ -]{1,11}$`. Only
 `fat32` formats. The caller must have the `SO_PEERCRED` uid equal to
 `PKEXEC_UID`; the socket lives in a 0700 directory the app creates.

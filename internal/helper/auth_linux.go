@@ -19,30 +19,30 @@ func NewAuth(uid int) (Auth, error) {
 	return peerAuth{uid: uid}, nil
 }
 
-func (a peerAuth) Authenticate(conn net.Conn) error {
+func (a peerAuth) Authenticate(conn net.Conn) (Peer, error) {
 	if a.uid < 0 {
-		return fmt.Errorf("%w: no expected caller uid", ErrUnauthorized)
+		return Peer{}, fmt.Errorf("%w: no expected caller uid", ErrUnauthorized)
 	}
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
-		return fmt.Errorf("%w: not a unix socket", ErrUnauthorized)
+		return Peer{}, fmt.Errorf("%w: not a unix socket", ErrUnauthorized)
 	}
 	raw, err := uc.SyscallConn()
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return Peer{}, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 	var cred *unix.Ucred
 	var cerr error
 	if err := raw.Control(func(fd uintptr) {
 		cred, cerr = unix.GetsockoptUcred(int(fd), unix.SOL_SOCKET, unix.SO_PEERCRED)
 	}); err != nil {
-		return fmt.Errorf("%w: %v", ErrUnauthorized, err)
+		return Peer{}, fmt.Errorf("%w: %v", ErrUnauthorized, err)
 	}
 	if cerr != nil {
-		return fmt.Errorf("%w: SO_PEERCRED: %v", ErrUnauthorized, cerr)
+		return Peer{}, fmt.Errorf("%w: SO_PEERCRED: %v", ErrUnauthorized, cerr)
 	}
 	if int(cred.Uid) != a.uid {
-		return fmt.Errorf("%w: peer uid %d, expected %d", ErrUnauthorized, cred.Uid, a.uid)
+		return Peer{}, fmt.Errorf("%w: peer uid %d, expected %d", ErrUnauthorized, cred.Uid, a.uid)
 	}
-	return nil
+	return Peer{UID: int(cred.Uid)}, nil
 }

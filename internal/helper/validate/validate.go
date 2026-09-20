@@ -108,16 +108,26 @@ func SourcePath(path string) (string, error) {
 	return path, nil
 }
 
-// Source checks the opened source file against the size the client claimed.
-func Source(fi fs.FileInfo, size int64) error {
+// Source checks the opened source file: a regular file owned by the caller,
+// of the size the client claimed. The helper runs as root, so without the
+// ownership check write_image would read any file on the system for the
+// caller; for the same reason no message here reveals the real size.
+func Source(fi fs.FileInfo, callerUID int, size int64) error {
 	if !fi.Mode().IsRegular() {
 		return proto.Errorf(proto.CodeInvalidSource, "%s is not a regular file", fi.Name())
+	}
+	owner, ok := fileOwner(fi)
+	if !ok {
+		return proto.Errorf(proto.CodeInvalidSource, "cannot determine the owner of %s", fi.Name())
+	}
+	if callerUID < 0 || owner != callerUID {
+		return proto.Errorf(proto.CodeInvalidSource, "%s is not owned by the caller", fi.Name())
 	}
 	if size <= 0 {
 		return proto.Errorf(proto.CodeInvalidSource, "size %d is not positive", size)
 	}
 	if fi.Size() != size {
-		return proto.Errorf(proto.CodeSizeMismatch, "source is %d bytes, request says %d", fi.Size(), size)
+		return proto.Errorf(proto.CodeSizeMismatch, "%s does not have the size the request claims", fi.Name())
 	}
 	return nil
 }

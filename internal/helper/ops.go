@@ -96,11 +96,12 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 		return proto.Errorf(proto.CodeInvalidSource, "open %s: %v", srcPath, err)
 	}
 	defer src.Close()
+	// fstat on the open fd: the file checked is the file that will be read.
 	fi, err := src.Stat()
 	if err != nil {
 		return proto.Errorf(proto.CodeInvalidSource, "stat %s: %v", srcPath, err)
 	}
-	if err := validate.Source(fi, p.Size); err != nil {
+	if err := validate.Source(fi, sess.peer.UID, p.Size); err != nil {
 		return err
 	}
 	if err := validate.Capacity(p.Size, info); err != nil {
@@ -117,13 +118,14 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 		}
 		return proto.Errorf(proto.CodeInternal, "open %s: %v", info.Path, err)
 	}
-	defer dst.Close()
 
 	sess.s.opts.Logger.Info("writing image", "source", srcPath, "device", info.Path, "bytes", p.Size)
 	if err := sess.stream(ctx, id, src, dst, p.Size); err != nil {
+		dst.Close()
 		return err
 	}
 	if err := dst.Sync(); err != nil {
+		dst.Close()
 		return proto.Errorf(proto.CodeInternal, "sync %s: %v", info.Path, err)
 	}
 	if err := dst.Close(); err != nil {
@@ -191,8 +193,11 @@ func (sess *session) formatDisk(ctx context.Context, p proto.FormatDiskParams) (
 	sess.s.opts.Logger.Info("formatting", "device", info.Path, "fs", fs, "label", p.Label)
 	mountpoint, err := sess.s.disk.Format(ctx, info.Path, fs, p.Label)
 	if err != nil {
-		if ctx.Err() != nil {
+		switch {
+		case ctx.Err() != nil:
 			return nil, proto.NewError(proto.CodeCancelled, "format cancelled")
+		case errors.Is(err, syscall.EBUSY):
+			return nil, proto.Errorf(proto.CodeDeviceBusy, "format %s: %v", info.Path, err)
 		}
 		return nil, proto.Errorf(proto.CodeInternal, "format %s: %v", info.Path, err)
 	}
