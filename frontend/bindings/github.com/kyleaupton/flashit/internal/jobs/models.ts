@@ -8,17 +8,14 @@ import { Create as $Create } from "@wailsio/runtime";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as core$0 from "../core/models.js";
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
-import * as time$0 from "../../../../../time/models.js";
 
 export class Job {
     "ID": string;
     "Plan": core$0.Plan | null;
     "Status": Status;
     "Progress": number;
-    "CreatedAt": time$0.Time;
-    "UpdatedAt": time$0.Time;
+    "CreatedAt": string;
+    "UpdatedAt": string;
 
     /** Creates a new Job instance. */
     constructor($$source: Partial<Job> = {}) {
@@ -35,10 +32,10 @@ export class Job {
             this["Progress"] = 0;
         }
         if (!("CreatedAt" in $$source)) {
-            this["CreatedAt"] = null;
+            this["CreatedAt"] = "0001-01-01T00:00:00.000Z";
         }
         if (!("UpdatedAt" in $$source)) {
-            this["UpdatedAt"] = null;
+            this["UpdatedAt"] = "0001-01-01T00:00:00.000Z";
         }
 
         Object.assign(this, $$source);
