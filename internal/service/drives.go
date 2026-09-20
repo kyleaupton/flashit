@@ -1,8 +1,8 @@
 package service
 
 import (
-	"github.com/kyleaupton/flashit/internal/drives"
 	"context"
+	"github.com/kyleaupton/flashit/internal/drives"
 )
 
 type DrivesService struct{}

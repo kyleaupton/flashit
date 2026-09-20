@@ -18,9 +18,9 @@ import (
 // This step is only executed if NeedsSplit is true.
 type SplitWim struct{}
 
-func (SplitWim) Key() string         { return "splitting-wim" }
-func (SplitWim) Name() string        { return "Splitting install.wim" }
-func (SplitWim) HasProgress() bool   { return true }
+func (SplitWim) Key() string       { return "splitting-wim" }
+func (SplitWim) Name() string      { return "Splitting install.wim" }
+func (SplitWim) HasProgress() bool { return true }
 
 func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

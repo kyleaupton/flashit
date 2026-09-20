@@ -1,9 +1,9 @@
 package jobs
 
 import (
+	"context"
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/logger"
-	"context"
 	"sync"
 	"time"
 )

@@ -25,9 +25,9 @@ import (
 // tmpfs: a multi-GB ISO won't fit in RAM.)
 type Prepare struct{}
 
-func (Prepare) Key() string         { return "preparing" }
-func (Prepare) Name() string        { return "Preparing ISO" }
-func (Prepare) HasProgress() bool   { return false }
+func (Prepare) Key() string       { return "preparing" }
+func (Prepare) Name() string      { return "Preparing ISO" }
+func (Prepare) HasProgress() bool { return false }
 
 func (Prepare) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

@@ -1,13 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/installers/linux"
 	"github.com/kyleaupton/flashit/internal/installers/windows"
 	"github.com/kyleaupton/flashit/internal/jobs"
-	"context"
-	"errors"
 	"os"
 )
 

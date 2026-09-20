@@ -19,9 +19,9 @@ type mockStep struct {
 	value string
 }
 
-func (m mockStep) Key() string                                                       { return m.key }
-func (m mockStep) Name() string                                                      { return "Mock: " + m.value }
-func (m mockStep) HasProgress() bool                                                 { return false }
+func (m mockStep) Key() string       { return m.key }
+func (m mockStep) Name() string      { return "Mock: " + m.value }
+func (m mockStep) HasProgress() bool { return false }
 func (m mockStep) Run(ctx context.Context, state *testContext, e core.Executor) error {
 	state.Values = append(state.Values, m.value)
 	return nil
@@ -33,9 +33,9 @@ type failingStep struct {
 	err error
 }
 
-func (f failingStep) Key() string                                                       { return f.key }
-func (f failingStep) Name() string                                                      { return "Failing step" }
-func (f failingStep) HasProgress() bool                                                 { return false }
+func (f failingStep) Key() string       { return f.key }
+func (f failingStep) Name() string      { return "Failing step" }
+func (f failingStep) HasProgress() bool { return false }
 func (f failingStep) Run(ctx context.Context, state *testContext, e core.Executor) error {
 	return f.err
 }
@@ -47,9 +47,9 @@ type cleanupStep struct {
 	cleanedUp *bool
 }
 
-func (c cleanupStep) Key() string                                                       { return c.key }
-func (c cleanupStep) Name() string                                                      { return "Cleanup: " + c.value }
-func (c cleanupStep) HasProgress() bool                                                 { return false }
+func (c cleanupStep) Key() string       { return c.key }
+func (c cleanupStep) Name() string      { return "Cleanup: " + c.value }
+func (c cleanupStep) HasProgress() bool { return false }
 func (c cleanupStep) Run(ctx context.Context, state *testContext, e core.Executor) error {
 	state.Values = append(state.Values, c.value)
 	return nil

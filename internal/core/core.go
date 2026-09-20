@@ -67,9 +67,9 @@ type StepInfo struct {
 type Plan struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
-	Steps     []Step         `json:"-"`               // Backend only - not serialized (deprecated: use Runnable)
-	Runnable  Runnable       `json:"-"`               // Pipeline with typed context (preferred)
-	StepInfos []StepInfo     `json:"stepInfos"`       // UI metadata for steps
+	Steps     []Step         `json:"-"`         // Backend only - not serialized (deprecated: use Runnable)
+	Runnable  Runnable       `json:"-"`         // Pipeline with typed context (preferred)
+	StepInfos []StepInfo     `json:"stepInfos"` // UI metadata for steps
 	Meta      map[string]any `json:"meta,omitempty"`
 }
 
@@ -102,7 +102,7 @@ type Event struct {
 	JobID   string  `json:"jobId"`
 	Type    string  `json:"type"`
 	Message string  `json:"message,omitempty"`
-	Step    string  `json:"step,omitempty"`    // Uses step key from StepInfos
+	Step    string  `json:"step,omitempty"` // Uses step key from StepInfos
 	Percent float64 `json:"percent,omitempty"`
 	Error   string  `json:"error,omitempty"`
 }

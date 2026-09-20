@@ -21,4 +21,3 @@ func SetRunner(r Runner) {
 func Run(ctx context.Context, name string, args ...string) (string, error) {
 	return defaultRunner.Run(ctx, name, args...)
 }
-

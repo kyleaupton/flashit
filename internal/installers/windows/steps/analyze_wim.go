@@ -20,9 +20,9 @@ const (
 // AnalyzeWim finds install.wim and checks if it needs splitting for FAT32.
 type AnalyzeWim struct{}
 
-func (AnalyzeWim) Key() string         { return "analyzing-wim" }
-func (AnalyzeWim) Name() string        { return "Analyzing install.wim" }
-func (AnalyzeWim) HasProgress() bool   { return false }
+func (AnalyzeWim) Key() string       { return "analyzing-wim" }
+func (AnalyzeWim) Name() string      { return "Analyzing install.wim" }
+func (AnalyzeWim) HasProgress() bool { return false }
 
 func (AnalyzeWim) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

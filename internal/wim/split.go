@@ -32,16 +32,16 @@ type SplitOptions struct {
 
 // splitBlob represents a blob to be written to a split WIM part.
 type splitBlob struct {
-	stream      StreamDescriptor // Original stream descriptor
-	partNumber  int              // Which part this blob is assigned to (1-based)
-	newOffset   int64            // New offset in the destination part
-	isMetadata  bool             // Whether this is a metadata blob
+	stream     StreamDescriptor // Original stream descriptor
+	partNumber int              // Which part this blob is assigned to (1-based)
+	newOffset  int64            // New offset in the destination part
+	isMetadata bool             // Whether this is a metadata blob
 }
 
 // splitPart represents a single SWM part file.
 type splitPart struct {
-	blobs     []*splitBlob
-	dataSize  int64 // Total size of blob data in this part
+	blobs    []*splitBlob
+	dataSize int64 // Total size of blob data in this part
 }
 
 // SplitWithProgress splits a WIM file into multiple SWM parts for FAT32 compatibility.
@@ -498,4 +498,3 @@ func CopySWMs(ctx context.Context, swmDir string, usbRoot string, cb func(done, 
 	}
 	return nil
 }
-

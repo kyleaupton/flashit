@@ -75,4 +75,3 @@ func SetProvider(p Provider) {
 	}
 	defaultProvider = p
 }
-
