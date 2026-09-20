@@ -8,23 +8,11 @@ vars:
   CROSS_IMAGE: wails-cross
   APP_ID: dev.kyleupton.flashit
   HELPER_ID: dev.kyleupton.flashit.helper
-  HELPER_PLIST: build/darwin/dev.kyleupton.flashit.helper.plist
   DEV_IDENTITY: "FlashIt Dev Code Signing"
-  # Label and socket path: internal/proto DarwinHelperLabel, DarwinSocketPath.
-  # The daemon accepts only clients signed as APP_ID with this exact leaf
-  # certificate. Empty when the dev certificate has not been created; the
-  # run task refuses to continue when more than one certificate matches.
-  DEV_LEAF_SHA1:
-    sh: security find-certificate -c "{{.DEV_IDENTITY}}" -Z 2>/dev/null | awk '/SHA-1/{print $3; exit}'
-  DEV_CERT_COUNT:
-    sh: security find-certificate -c "{{.DEV_IDENTITY}}" -a -Z 2>/dev/null | grep -c 'SHA-1' || true
-  # Dev builds stamp app and helper with a hash of the helper's sources, so
-  # the app re-registers the daemon exactly when the helper changed. The
-  # app's stamp is priv.HelperVersion, set with -X below.
-  HELPER_SRC_HASH:
-    sh: find cmd/flashit-helper internal/helper internal/proto -type f -not -name '*_test.go' | LC_ALL=C sort | xargs shasum -a 256 | shasum -a 256 | cut -c1-12
-  DEV_HELPER_VERSION: 'dev-{{.HELPER_SRC_HASH}}'
-  HELPER_VERSION_VAR: github.com/kyleaupton/flashit/internal/priv.HelperVersion
+  # A stable signing identity keeps TCC's Removable Volumes grant across
+  # rebuilds; an ad-hoc signature is a new identity every build.
+  DEV_CERT_PRESENT:
+    sh: security find-certificate -c "{{.DEV_IDENTITY}}" >/dev/null 2>&1 && echo yes || echo no
 
 tasks:
   build:
@@ -63,8 +51,7 @@ tasks:
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o "{{.OUTPUT}}"'
     vars:
       VERSION: '{{.VERSION | default "dev"}}'
-      # Dev builds expect the source-stamped helper; releases expect VERSION.
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or (eq .OBFUSCATED "true") .EXTRA_TAGS}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l" -ldflags="-X main.Version={{.VERSION}} -X {{.HELPER_VERSION_VAR}}={{.DEV_HELPER_VERSION}}"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -X main.Version={{.VERSION}} -X {{.HELPER_VERSION_VAR}}={{.VERSION}}"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or (eq .OBFUSCATED "true") .EXTRA_TAGS}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l" -ldflags="-X main.Version={{.VERSION}}"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -X main.Version={{.VERSION}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
@@ -105,13 +92,11 @@ tasks:
         sh: 'wails3 tool docker-mounts'
 
   build:helper:
-    summary: Builds the privileged helper daemon with its client code requirement baked in
+    summary: Builds the helper that the app spawns as a child
     cmds:
-      - go build -trimpath -buildvcs=false -ldflags "-w -s -X main.Version={{.HELPER_VERSION}} -X main.AppIdentifier={{.APP_ID}} -X main.LeafSHA1={{.LEAF_SHA1}} -X main.TeamID={{.TEAM_ID}}" -o "{{.BIN_DIR}}/flashit-helper" ./cmd/flashit-helper
+      - go build -trimpath -buildvcs=false -ldflags "-w -s -X main.Version={{.HELPER_VERSION}}" -o "{{.BIN_DIR}}/flashit-helper" ./cmd/flashit-helper
     vars:
-      HELPER_VERSION: '{{.HELPER_VERSION}}'
-      LEAF_SHA1: '{{.LEAF_SHA1}}'
-      TEAM_ID: '{{.TEAM_ID}}'
+      HELPER_VERSION: '{{.HELPER_VERSION | default "dev"}}'
     env:
       GOOS: darwin
       CGO_ENABLED: 1
@@ -152,28 +137,20 @@ tasks:
     summary: Packages the application into a `.app` bundle
     deps:
       - task: build
-    preconditions:
-      - sh: '[ -n "$APPLE_SIGNING_IDENTITY" ]'
-        msg: "APPLE_SIGNING_IDENTITY must be set: the helper is built to accept only apps signed by APPLE_TEAM_ID, and an ad-hoc signed bundle would be refused by its own daemon."
     cmds:
       - task: build:helper
         vars:
           HELPER_VERSION: '{{.VERSION | default "dev"}}'
-          TEAM_ID: '{{.APPLE_TEAM_ID}}'
       - task: create:app:bundle
 
   package:universal:
     summary: Packages darwin universal binary (arm64 + amd64)
     deps:
       - task: build:universal
-    preconditions:
-      - sh: '[ -n "$APPLE_SIGNING_IDENTITY" ]'
-        msg: "APPLE_SIGNING_IDENTITY must be set: the helper is built to accept only apps signed by APPLE_TEAM_ID, and an ad-hoc signed bundle would be refused by its own daemon."
     cmds:
       - task: build:helper
         vars:
           HELPER_VERSION: '{{.VERSION | default "dev"}}'
-          TEAM_ID: '{{.APPLE_TEAM_ID}}'
       - task: create:app:bundle
 
   generate:info:plist:
@@ -196,23 +173,24 @@ tasks:
         vars:
           APP: '{{.APP}}'
           INFO_PLIST: build/darwin/Info.plist
-      # Sign in order: helper, then main binary, then bundle. The helper gets
-      # the hardened runtime and nothing else; the app keeps its entitlements.
+      # Sign in order: helper, then main binary, then bundle, all with the
+      # same identity and the hardened runtime. The helper needs no
+      # entitlements; the app keeps its own. Ad hoc when no identity is set.
       - codesign --force --options runtime --identifier {{.HELPER_ID}} --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/flashit-helper"
       - codesign --force --options runtime --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
       - codesign --force --options runtime --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}"
     vars:
       APP: '{{.BIN_DIR}}/{{.APP_NAME}}.app'
-      SIGNING_IDENTITY: '{{.APPLE_SIGNING_IDENTITY}}'
+      SIGNING_IDENTITY: '{{.APPLE_SIGNING_IDENTITY | default "-"}}'
 
   assemble:bundle:
-    summary: Lays out a bundle from bin/ (app, helper, launchd plist, icons)
+    summary: Lays out a bundle from bin/ (app, helper, icons)
     internal: true
     cmds:
       # Start clean: a file left over from an earlier layout would be sealed
       # into the signature.
       - rm -rf "{{.APP}}/Contents"
-      - mkdir -p "{{.APP}}/Contents/MacOS" "{{.APP}}/Contents/Resources" "{{.APP}}/Contents/Library/LaunchDaemons"
+      - mkdir -p "{{.APP}}/Contents/MacOS" "{{.APP}}/Contents/Resources"
       - cp build/darwin/icons.icns "{{.APP}}/Contents/Resources"
       - |
         if [ -f build/darwin/Assets.car ]; then
@@ -220,32 +198,27 @@ tasks:
         fi
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
       - cp "{{.BIN_DIR}}/flashit-helper" "{{.APP}}/Contents/MacOS/flashit-helper"
-      - cp "{{.HELPER_PLIST}}" "{{.APP}}/Contents/Library/LaunchDaemons/"
       - cp "{{.INFO_PLIST}}" "{{.APP}}/Contents/Info.plist"
 
   run:
     summary: Builds the dev bundle with the helper inside, signs it and launches it
-    preconditions:
-      - sh: '[ "{{.DEV_CERT_COUNT}}" -le 1 ]'
-        msg: "More than one certificate named '{{.DEV_IDENTITY}}' is in the keychain; the helper can only be built to trust one. Delete the extras in Keychain Access."
     cmds:
       - task: build:helper
-        vars:
-          HELPER_VERSION: '{{.DEV_HELPER_VERSION}}'
-          LEAF_SHA1: '{{.DEV_LEAF_SHA1}}'
       - task: assemble:bundle
         vars:
           APP: '{{.APP}}'
           INFO_PLIST: build/darwin/Info.dev.plist
       - |
-        if [ -n "{{.DEV_LEAF_SHA1}}" ]; then
+        if [ "{{.DEV_CERT_PRESENT}}" = yes ]; then
           codesign --force --options runtime --timestamp=none --identifier {{.HELPER_ID}} --sign "{{.DEV_IDENTITY}}" "{{.APP}}/Contents/MacOS/flashit-helper"
           codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign "{{.DEV_IDENTITY}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
           codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign "{{.DEV_IDENTITY}}" "{{.APP}}"
         else
           echo "WARNING: certificate '{{.DEV_IDENTITY}}' not found in the keychain; signing ad hoc." >&2
-          echo "         The helper daemon will refuse this app. See DEV_SETUP.md to create the certificate." >&2
-          codesign --force --deep --sign - "{{.APP}}"
+          echo "         macOS will ask for Removable Volumes access again after every rebuild. See DEV_SETUP.md." >&2
+          codesign --force --options runtime --timestamp=none --identifier {{.HELPER_ID}} --sign - "{{.APP}}/Contents/MacOS/flashit-helper"
+          codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign - "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
+          codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign - "{{.APP}}"
         fi
       - '"{{.APP}}/Contents/MacOS/{{.APP_NAME}}"'
     vars:

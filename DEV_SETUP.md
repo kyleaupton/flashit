@@ -1,9 +1,41 @@
 # Development setup (macOS)
 
-FlashIt does its disk work through a privileged helper. On macOS that is a
-launchd daemon inside the app bundle, registered with `SMAppService` on
-first use. The daemon only talks to processes signed as `dev.kyleupton.flashit`
-with a known certificate, so a dev build needs a code signing identity.
+FlashIt writes disks through `flashit-helper`, an unprivileged child process
+the app spawns from inside its bundle. Nothing runs as root: for each flash
+the helper asks `/usr/libexec/authopen` for the open raw device after the
+authorization sheet, and macOS gates that behind the Removable Volumes
+permission, which it prompts for once per app identity. A dev build needs
+a stable code signing identity so that grant survives rebuilds.
+
+## Clean slate from the daemon builds
+
+Earlier builds of this branch registered a root launchd daemon and an
+authorization right on this machine. Remove them once; nothing in the
+current build needs or checks them.
+
+```bash
+sudo launchctl bootout system/dev.kyleupton.flashit.helper
+sudo rm -f /var/run/dev.kyleupton.flashit.sock /var/log/dev.kyleupton.flashit.helper.log
+sudo security authorizationdb remove dev.kyleupton.flashit.write
+sudo pkill -f flashit-helper
+rm -rf bin/FlashIt.dev.app
+```
+
+Then check Login Items & Extensions › Allow in the Background. If FlashIt
+is still listed there after the commands above, `sfltool resetbtm` clears
+it, at the cost of every app's background item, so only do that if the
+entry bothers you.
+
+### Machines that ran the SMJobBless helper
+
+Builds before the Go helper installed a daemon under the same label from
+`/Library`:
+
+```bash
+sudo launchctl bootout system/dev.kyleupton.flashit.helper
+sudo rm -f /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist \
+           /Library/PrivilegedHelperTools/dev.kyleupton.flashit.helper
+```
 
 ## One-time: create the dev certificate
 
@@ -15,18 +47,9 @@ with a known certificate, so a dev build needs a code signing identity.
    - **Certificate Type**: **Code Signing** (not "Root Certificate")
 4. Create, Continue, Done. It lands in the login keychain, valid for a year.
 
-Check it:
-
-```bash
-security find-certificate -c "FlashIt Dev Code Signing" -Z | grep SHA-1
-```
-
-The hash printed is what the helper is built to accept. The identity does
-not appear in `security find-identity -p codesigning`; that is normal for a
-self-signed certificate and does not matter.
-
-If the details window says "Self-signed root certificate", delete it (and its
-private key) and create it again with **Code Signing** selected.
+Without it `task dev` signs ad hoc, which works, but an ad-hoc signature
+is a new identity on every build, so macOS asks for Removable Volumes
+access again after each rebuild.
 
 ## Daily workflow
 
@@ -35,66 +58,31 @@ task dev
 ```
 
 This builds the app and the helper, assembles `bin/FlashIt.dev.app` with the
-helper and its launchd plist inside, signs everything with the dev
-certificate, and launches the app. Without the certificate the bundle is
-signed ad hoc, a warning is printed, and the helper refuses the app.
+helper at `Contents/MacOS/flashit-helper`, signs both with the dev
+certificate and the hardened runtime, and launches the app.
 
-The first time a flash starts, the app registers the daemon and macOS shows
-"Background Items Added". The flash fails with a "Permission needed" panel:
-click **Open System Settings**, switch **FlashIt** on under Login Items &
-Extensions › Allow in the Background, then **Try again**. From then on the
-daemon runs as root under launchd and every launch of the app finds it.
+The first flash on a fresh machine shows two prompts: `"FlashIt" would like
+to access files on a removable volume` (Allow), then the password sheet
+`FlashIt wants to make changes.` raised by the helper right before the
+write. From then on it is one sheet per flash. Clicking Don't Allow on the
+first prompt makes the flash fail with a "Permission needed" panel that
+opens Privacy & Security › Files and Folders › Removable Volumes; switch
+FlashIt on there and try again.
 
-Each flash raises exactly one authorization sheet ("FlashIt needs to write to
-a removable drive."), raised by the helper right before the destructive step.
+To see the prompt again:
 
-When the helper's sources change, `task dev` bakes a new version stamp into
-both the app and the helper; the app notices on its next connection,
-unregisters and registers the daemon again. Registering can keep failing
-for about a minute after an unregister; the app retries for up to 30 s per
-attempt and then asks you to try again. No System Settings visit is needed.
+```bash
+tccutil reset SystemPolicyRemovableVolumes dev.kyleupton.flashit
+```
 
 ## Watching the helper
 
-```bash
-tail -f /var/log/dev.kyleupton.flashit.helper.log
-launchctl print system/dev.kyleupton.flashit.helper | grep -E 'state|runs|last exit'
-security authorizationdb read dev.kyleupton.flashit.write
-```
-
-## Clean slate
-
-Unregistering leaves the socket and the authorization right behind; they
-are ours to remove. Removing the right is safe because the daemon rewrites
-it, and verifies what authd stored, every time it starts; a right created
-by someone else in the meantime is refused, never trusted. The Background
-Items record stays (only `sfltool resetbtm` clears those, for every app, so
-leave it).
-
-```bash
-sudo launchctl bootout system/dev.kyleupton.flashit.helper
-sudo security authorizationdb remove dev.kyleupton.flashit.write
-sudo pkill -f flashit-helper
-sudo rm -f /var/run/dev.kyleupton.flashit.sock /var/log/dev.kyleupton.flashit.helper.log
-rm -rf bin/FlashIt.dev.app
-```
-
-### Machines that ran the old helper
-
-Builds before the Go helper installed an SMJobBless daemon under the same
-label. `SMAppService` reports it as enabled and the app refuses to proceed
-until it is gone:
-
-```bash
-sudo launchctl bootout system/dev.kyleupton.flashit.helper
-sudo rm -f /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist \
-           /Library/PrivilegedHelperTools/dev.kyleupton.flashit.helper
-```
+The helper's log goes to the app's log, prefixed `helper:`. While a write
+runs, `lsof /dev/rdiskN` lists only `flashit-helper`; authd's view of the
+sheet is in `log stream --predicate 'process == "authd"'`.
 
 ## Release builds
 
 `task darwin:package` builds `bin/FlashIt.app` signed with
-`APPLE_SIGNING_IDENTITY` and bakes `APPLE_TEAM_ID` into the helper, so it
-accepts any FlashIt signed by that team. Both variables are required: an
-ad-hoc signed bundle would be refused by its own daemon. The release
-workflow then notarizes the bundle.
+`APPLE_SIGNING_IDENTITY` when set and ad hoc otherwise; `APPLE_TEAM_ID` is
+needed for the Info.plist. The release workflow then notarizes the bundle.

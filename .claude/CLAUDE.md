@@ -28,9 +28,9 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 - Task (`Taskfile.yml`) drives build and dev
 
 WIM reading, splitting and LZX decompression are pure Go in `internal/wim`;
-there is no wimlib dependency. cgo is used only on macOS: the helper daemon's
-Security/DiskArbitration bindings in `internal/helper/*_darwin.{c,h}` and the
-app's SMAppService/Authorization shim in `internal/priv/shim_darwin.{m,h}`.
+there is no wimlib dependency. cgo is used only on macOS: the helper's
+Authorization/DiskArbitration bindings in `internal/helper/*_darwin.{c,h}`
+and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 
 ## Layout
 
@@ -47,15 +47,15 @@ internal/iso/                Hybrid ISO validation and ISO mounting per OS
 internal/wim/                WIM reader, splitter, lzx/ decompressor
 internal/fs/                 File copy, APFS clone on darwin
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol v2)
-internal/helper/             Root-side helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,auth,authz,listen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
-internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + shim_darwin.m (SMAppService daemon), windows/ (old helper)
+internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
+internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), windows/ (old helper)
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
-cmd/flashit-helper/          Go privileged helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (launchd daemon)
+cmd/flashit-helper/          Go helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3)
 cmd/wimtest/                 CLI for exercising the WIM splitter
 helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
-build/                       Per-platform Taskfiles and packaging config; build/darwin holds the daemon's launchd plist
+build/                       Per-platform Taskfiles and packaging config
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
 
@@ -64,7 +64,7 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```bash
 task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
 task build                # build for the host OS into bin/
-task darwin:package       # signed release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
+task darwin:package       # release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
 go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/iso, internal/drives (linux-only)
 GOOS=linux go build ./cmd/flashit-helper   # cross-compile the Go helper; `task linux:build:helper` puts it in bin/helpers/
 wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
@@ -81,7 +81,7 @@ Host OS support:
 
 | Host    | Drive listing | ISO mount | Privileged helper |
 | ------- | ------------- | --------- | ----------------- |
-| macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` as a launchd daemon in the bundle (`SMAppService`), unix socket at `/var/run/dev.kyleupton.flashit.sock` |
+| macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` spawned from the bundle as an unprivileged child, socketpair on fd 3; the raw device comes from `authopen` per flash |
 | Linux   | yes (`lsblk`) | no, stub returns an error | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
 | Windows | yes (PowerShell) | yes | named-pipe helper |
 
@@ -152,27 +152,33 @@ and ZFS roots through the mount source), fail closed. The caller's
 `SO_PEERCRED` uid must equal `PKEXEC_UID`; the socket lives in a 0700
 directory the app creates.
 
-macOS: every connection is checked by `LOCAL_PEERTOKEN` audit token against
-a code requirement baked in at build time (`identifier "dev.kyleupton.flashit"
-and certificate leaf = H"<dev cert SHA-1>"` for dev builds, `anchor apple
-generic and certificate leaf[subject.OU] = "<team>"` for releases). Removable
-means `diskutil` reports RemovableMedia or Ejectable, not Internal, and not
-Virtual (disk images and synthesized APFS containers are refused). The system
-disks are the physical stores behind the APFS container mounted at `/`.
-`write_image` and `format_disk` carry the external form of an
-`AuthorizationRef`; the helper redeems it for the right
-`dev.kyleupton.flashit.write`, so the password sheet is raised by the helper
-right before the destructive step, one per flash. Because `config.add` is
-open to anyone, the helper rewrites that right's rule on every start and
-reads it back (class user, group admin, authenticate-user, allow-root false,
-shared false, timeout at most 30) before serving, and checks it again before
-every use; a planted permissive rule is refused, not honored. Raw writes go to `/dev/rdiskN` under a Disk Arbitration claim.
+macOS: nothing runs as root and there is no daemon, socket file or peer
+check; the helper is the app's own child on an inherited socketpair, so the
+only client is the parent. Removable means `diskutil` reports RemovableMedia
+or Ejectable, not Internal, and not Virtual (disk images and synthesized APFS
+containers are refused). The system disks are the physical stores behind the
+APFS container mounted at `/`. `write_image` and `format_disk` carry the
+external form of an unauthorized `AuthorizationRef` the app created. After
+validation the helper probes `/dev/rdiskN` read-only (EPERM is the user
+refusing Removable Volumes, reported as `tcc_denied`; EACCES is normal), then
+calls `AuthorizationCopyRights` on that ref for Apple's
+`sys.openfile.readwrite./dev/rdiskN` with interaction allowed: one password
+sheet per flash, named after the app, right before the destructive step.
+Only a ref that passed that check reaches `/usr/libexec/authopen -extauth`,
+which sends the open descriptor back over `SCM_RIGHTS`; a bad form would
+make authopen raise a second sheet. The authorized form is a bearer
+credential for a root read-write open of any path for the rule's timeout, so
+the helper composes the authopen path from its own validated `DeviceInfo`
+(never from the request), the form never leaves the socketpair, and the ref
+is destroyed (`kAuthorizationFlagDestroyRights`) the moment `OpenRaw`
+returns. Raw writes go through that descriptor under a Disk Arbitration
+claim; unmount, FAT32 erase and eject are unprivileged `diskutil` calls.
 
 ## Docs
 
 - `docs/handovers/README.md` - how delegated work briefs are written, and the
   open briefs
 - `docs/spikes/` - spike write-ups
-- `DEV_SETUP.md` - macOS dev certificate, daemon approval, clean-slate commands
+- `DEV_SETUP.md` - macOS dev certificate, Removable Volumes prompt, clean-slate commands
 
 `docs/` is gitignored; it is local-only context, not part of the repo.

@@ -5,6 +5,8 @@
             <string>APPL</string>
         <key>CFBundleName</key>
             <string>FlashIt</string>
+        <key>CFBundleDisplayName</key>
+            <string>FlashIt</string>
         <key>CFBundleExecutable</key>
             <string>FlashIt</string>
         <key>CFBundleIdentifier</key>
