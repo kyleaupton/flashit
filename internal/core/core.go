@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"time"
 )
 
 // DryRun controls whether real disk operations are performed.
@@ -18,18 +17,6 @@ const (
 	OSMacOS   OSFamily = "macos"
 )
 
-type HostInfo struct {
-	OS       OSFamily
-	Arch     string
-	Version  string
-	HasAdmin bool
-}
-
-type Capability struct {
-	Supported bool
-	Reasons   []string
-}
-
 type Target struct {
 	Family  OSFamily
 	Version string
@@ -42,18 +29,8 @@ type SourceSpec struct {
 	Local    string
 }
 
-type SourceMode string
-
-const (
-	SourceModeSupply   SourceMode = "supply"
-	SourceModeDownload SourceMode = "download"
-	SourceModeBoth     SourceMode = "both"
-)
-
 type CreateRequest struct {
-	Target  Target
 	DriveID string
-	Options map[string]any
 	Source  SourceSpec
 }
 
@@ -67,25 +44,16 @@ type StepInfo struct {
 type Plan struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
-	Steps     []Step         `json:"-"`         // Backend only - not serialized (deprecated: use Runnable)
-	Runnable  Runnable       `json:"-"`         // Pipeline with typed context (preferred)
-	StepInfos []StepInfo     `json:"stepInfos"` // UI metadata for steps
+	Runnable  Runnable       `json:"-"`
+	StepInfos []StepInfo     `json:"stepInfos"`
 	Meta      map[string]any `json:"meta,omitempty"`
-}
-
-type Step interface {
-	Name() string
-	Run(ctx context.Context, e Executor) error
-	Estimate() time.Duration
 }
 
 // Runnable is a type-erased interface for executing typed pipelines.
 // Pipelines with typed context implement this interface to allow
 // the job manager to run them without knowing the context type.
 type Runnable interface {
-	// StepInfos returns metadata about steps for UI display.
 	StepInfos() []StepInfo
-	// Run executes the pipeline.
 	Run(ctx context.Context, e Executor) error
 }
 
@@ -93,8 +61,6 @@ type Installer interface {
 	ID() string
 	Name() string
 	Targets() []Target
-	AllowedSources() SourceMode
-	ValidateHost(ctx context.Context, host HostInfo) Capability
 	Plan(ctx context.Context, req CreateRequest) (*Plan, error)
 }
 

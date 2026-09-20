@@ -42,16 +42,6 @@ func NewManager(emit func(ev core.Event)) *Manager {
 	}
 }
 
-func (m *Manager) List() []Job {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]Job, 0, len(m.jobs))
-	for _, j := range m.jobs {
-		out = append(out, *j)
-	}
-	return out
-}
-
 // Cancel cancels a running job by ID.
 // Returns true if the job was found and cancelled, false if not found or already completed.
 func (m *Manager) Cancel(jobID string) bool {
@@ -104,16 +94,6 @@ type execAdapter struct {
 
 func (e execAdapter) Emit(ev core.Event) { ev.JobID = e.jobID; e.emit(ev) }
 
-func (m *Manager) run(ctx context.Context, job *Job) {
-	// Prefer Runnable (typed pipeline) over legacy Steps
-	if job.Plan.Runnable != nil {
-		m.runPipeline(ctx, job)
-		return
-	}
-
-	m.runLegacySteps(ctx, job)
-}
-
 // cleanupJob removes the cancel func for a completed job.
 func (m *Manager) cleanupJob(jobID string) {
 	m.mu.Lock()
@@ -121,13 +101,11 @@ func (m *Manager) cleanupJob(jobID string) {
 	m.mu.Unlock()
 }
 
-// runPipeline runs a job using the new typed pipeline system.
-func (m *Manager) runPipeline(ctx context.Context, job *Job) {
-	// Clean up cancel func when done
+func (m *Manager) run(ctx context.Context, job *Job) {
 	defer m.cleanupJob(job.ID)
 
 	stepInfos := job.Plan.Runnable.StepInfos()
-	logger.Info("job started (pipeline)", "jobID", job.ID, "steps", len(stepInfos))
+	logger.Info("job started", "jobID", job.ID, "steps", len(stepInfos))
 
 	m.mu.Lock()
 	job.Status = StatusRunning
@@ -139,51 +117,6 @@ func (m *Manager) runPipeline(ctx context.Context, job *Job) {
 
 	err := job.Plan.Runnable.Run(ctx, e)
 	if err != nil {
-		// Check if this was a cancellation
-		if ctx.Err() == context.Canceled {
-			logger.Info("job cancelled (pipeline)", "jobID", job.ID)
-			m.mu.Lock()
-			job.Status = StatusCancelled
-			job.UpdatedAt = time.Now()
-			m.mu.Unlock()
-			m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status)})
-			return
-		}
-
-		logger.Error("job failed (pipeline)", "jobID", job.ID, "error", err)
-		m.mu.Lock()
-		job.Status = StatusFailed
-		job.UpdatedAt = time.Now()
-		m.mu.Unlock()
-		m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status), Error: err.Error()})
-		return
-	}
-
-	logger.Info("job completed (pipeline)", "jobID", job.ID)
-	m.mu.Lock()
-	job.Status = StatusSucceeded
-	job.UpdatedAt = time.Now()
-	m.mu.Unlock()
-	m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status)})
-}
-
-// runLegacySteps runs a job using the legacy []Step system.
-func (m *Manager) runLegacySteps(ctx context.Context, job *Job) {
-	// Clean up cancel func when done
-	defer m.cleanupJob(job.ID)
-
-	logger.Info("job started", "jobID", job.ID, "steps", len(job.Plan.Steps))
-
-	m.mu.Lock()
-	job.Status = StatusRunning
-	job.UpdatedAt = time.Now()
-	m.mu.Unlock()
-	m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status)})
-
-	e := execAdapter{emit: m.emit, jobID: job.ID}
-	total := float64(len(job.Plan.Steps))
-	for i, s := range job.Plan.Steps {
-		// Check for cancellation before each step
 		if ctx.Err() == context.Canceled {
 			logger.Info("job cancelled", "jobID", job.ID)
 			m.mu.Lock()
@@ -194,41 +127,13 @@ func (m *Manager) runLegacySteps(ctx context.Context, job *Job) {
 			return
 		}
 
-		// Use step key from StepInfos for event emission
-		stepKey := ""
-		if i < len(job.Plan.StepInfos) {
-			stepKey = job.Plan.StepInfos[i].Key
-		}
-
-		logger.Debug("step starting", "jobID", job.ID, "step", s.Name(), "key", stepKey, "index", i)
-		e.Emit(core.Event{Type: "step-start", Step: stepKey, Message: s.Name()})
-		err := s.Run(ctx, e)
-		if err != nil {
-			// Check if this was a cancellation
-			if ctx.Err() == context.Canceled {
-				logger.Info("job cancelled", "jobID", job.ID)
-				m.mu.Lock()
-				job.Status = StatusCancelled
-				job.UpdatedAt = time.Now()
-				m.mu.Unlock()
-				m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status)})
-				return
-			}
-
-			logger.Error("step failed", "jobID", job.ID, "step", s.Name(), "key", stepKey, "error", err)
-			m.mu.Lock()
-			job.Status = StatusFailed
-			job.UpdatedAt = time.Now()
-			m.mu.Unlock()
-			m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status), Step: stepKey, Error: err.Error()})
-			return
-		}
-		logger.Debug("step completed", "jobID", job.ID, "step", s.Name(), "key", stepKey)
+		logger.Error("job failed", "jobID", job.ID, "error", err)
 		m.mu.Lock()
-		job.Progress = float64(i+1) / total
+		job.Status = StatusFailed
 		job.UpdatedAt = time.Now()
 		m.mu.Unlock()
-		e.Emit(core.Event{Type: "step-end", Step: stepKey})
+		m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status), Error: err.Error()})
+		return
 	}
 
 	logger.Info("job completed", "jobID", job.ID)

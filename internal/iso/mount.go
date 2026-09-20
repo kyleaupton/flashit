@@ -46,11 +46,3 @@ func DetachExisting(ctx context.Context, isoPath string) string {
 func IsMountSupported() bool {
 	return defaultMounter.IsSupported()
 }
-
-// SetMounter allows tests or callers to swap the mounter implementation.
-func SetMounter(m Mounter) {
-	if m == nil {
-		return
-	}
-	defaultMounter = m
-}

@@ -1,14 +1,26 @@
 // Re-export Wails bindings types for convenience
 export type { Drive } from '@flashit/drives/models'
-export type { Job } from '@flashit/jobs/models'
-export { Status } from '@flashit/jobs/models'
 export type { InstallerMeta, StartJobRequest, StartJobResponse } from '@flashit/service/models'
-export type { Plan, Target, OSFamily, StepInfo } from '@flashit/core/models'
+export type { Target, OSFamily, StepInfo } from '@flashit/core/models'
 
 // Import Target for local use in this file
 import type { Target } from '@flashit/core/models'
 
 // Frontend-specific types
+
+/** Mirrors jobs.Status in the Go backend, which is not part of the bindings. */
+export enum Status {
+  StatusPending = 'pending',
+  StatusRunning = 'running',
+  StatusSucceeded = 'succeeded',
+  StatusFailed = 'failed',
+  StatusCancelled = 'cancelled',
+}
+
+export interface Job {
+  ID: string
+  Status: Status
+}
 
 /** Event payload from backend job:event emissions */
 export interface JobEvent {

@@ -2,8 +2,8 @@ import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { Events } from '@wailsio/runtime'
 import { toast } from 'vue-sonner'
-import { StartJob, ListJobs, CancelJob } from '@flashit/service/jobsservice'
-import { Status } from '@flashit/jobs/models'
+import { StartJob, CancelJob } from '@flashit/service/jobsservice'
+import { Status } from '@/types'
 import type { Job, JobEvent, StartJobRequest, StepState } from '@/types'
 import { WailsEventNames } from '@/composables'
 
@@ -202,11 +202,7 @@ export const useJobStore = defineStore('job', () => {
       // Create a placeholder job entry
       jobs.value.set(response.jobId, {
         ID: response.jobId,
-        Plan: null,
         Status: Status.StatusPending,
-        Progress: 0,
-        CreatedAt: null as any,
-        UpdatedAt: null as any,
       })
 
       // Replay any events that arrived before we had the job ID
@@ -222,17 +218,6 @@ export const useJobStore = defineStore('job', () => {
       throw e
     } finally {
       isStarting.value = false
-    }
-  }
-
-  async function refreshJobs(): Promise<void> {
-    try {
-      const jobList = await ListJobs()
-      jobList.forEach((job) => {
-        jobs.value.set(job.ID, job)
-      })
-    } catch (e) {
-      console.error('Failed to refresh jobs:', e)
     }
   }
 
@@ -303,7 +288,6 @@ export const useJobStore = defineStore('job', () => {
     subscribeToEvents,
     unsubscribeFromEvents,
     startJob,
-    refreshJobs,
     cancelJob,
     clearCurrentJob,
     $reset,

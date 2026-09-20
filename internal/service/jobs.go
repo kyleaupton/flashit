@@ -86,8 +86,6 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	}, nil
 }
 
-func (s *JobsService) ListJobs() []jobs.Job { return s.mgr.List() }
-
 // CancelJob cancels a running job by ID.
 // Returns true if the job was found and cancelled, false if not found or already completed.
 func (s *JobsService) CancelJob(jobID string) bool {

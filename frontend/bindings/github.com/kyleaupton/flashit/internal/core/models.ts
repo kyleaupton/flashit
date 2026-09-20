@@ -16,48 +16,6 @@ export enum OSFamily {
     OSMacOS = "macos",
 };
 
-export class Plan {
-    "id": string;
-    "name": string;
-
-    /**
-     * UI metadata for steps
-     */
-    "stepInfos": StepInfo[];
-    "meta"?: { [_ in string]?: any };
-
-    /** Creates a new Plan instance. */
-    constructor($$source: Partial<Plan> = {}) {
-        if (!("id" in $$source)) {
-            this["id"] = "";
-        }
-        if (!("name" in $$source)) {
-            this["name"] = "";
-        }
-        if (!("stepInfos" in $$source)) {
-            this["stepInfos"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new Plan instance from a string or object.
-     */
-    static createFrom($$source: any = {}): Plan {
-        const $$createField2_0 = $$createType1;
-        const $$createField3_0 = $$createType2;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("stepInfos" in $$parsedSource) {
-            $$parsedSource["stepInfos"] = $$createField2_0($$parsedSource["stepInfos"]);
-        }
-        if ("meta" in $$parsedSource) {
-            $$parsedSource["meta"] = $$createField3_0($$parsedSource["meta"]);
-        }
-        return new Plan($$parsedSource as Partial<Plan>);
-    }
-}
-
 /**
  * StepInfo provides metadata about a step for UI display
  */
@@ -129,8 +87,3 @@ export class Target {
         return new Target($$parsedSource as Partial<Target>);
     }
 }
-
-// Private type creation functions
-const $$createType0 = StepInfo.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = $Create.Map($Create.Any, $Create.Any);
