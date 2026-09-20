@@ -5,6 +5,7 @@ import { useDrivesStore } from '@/stores'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Badge } from '@/components/ui/badge'
+import { formatSize } from '@/lib/utils'
 
 const drivesStore = useDrivesStore()
 
@@ -15,13 +16,6 @@ const selectedDriveId = computed({
 })
 const hasDrives = computed(() => drivesStore.hasDrives)
 const isLoading = computed(() => drivesStore.isLoading)
-
-function formatSize(bytes: number): string {
-  const gb = bytes / (1024 * 1024 * 1024)
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  const mb = bytes / (1024 * 1024)
-  return `${mb.toFixed(0)} MB`
-}
 </script>
 
 <template>

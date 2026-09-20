@@ -1,17 +1,15 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { ListInstallers } from '@flashit/service/jobsservice'
-import type { InstallerMeta, Target, SourceInfo } from '@/types'
+import { formatSize } from '@/lib/utils'
+import type { InstallerMeta, SourceInfo } from '@/types'
 
 export const useSourceStore = defineStore('source', () => {
-  // State
   const source = ref<SourceInfo | null>(null)
   const installers = ref<InstallerMeta[]>([])
-  const selectedTargetIndex = ref<number>(0)
   const isAnalyzing = ref(false)
   const error = ref<string | null>(null)
 
-  // Getters
   const hasSource = computed(() => source.value !== null)
 
   const filename = computed(() => source.value?.filename ?? null)
@@ -21,23 +19,10 @@ export const useSourceStore = defineStore('source', () => {
     return installers.value.find((i) => i.ID === source.value!.installerID) ?? null
   })
 
-  const selectedTarget = computed((): Target | null => {
-    if (!source.value?.detectedTargets?.length) return null
-    return source.value.detectedTargets[selectedTargetIndex.value] ?? null
-  })
+  const fileSizeFormatted = computed(() =>
+    source.value?.sizeBytes ? formatSize(source.value.sizeBytes) : null
+  )
 
-  const fileSizeFormatted = computed(() => {
-    if (!source.value?.sizeBytes) return null
-    const bytes = source.value.sizeBytes
-    const gb = bytes / (1024 * 1024 * 1024)
-    if (gb >= 1) {
-      return `${gb.toFixed(1)} GB`
-    }
-    const mb = bytes / (1024 * 1024)
-    return `${mb.toFixed(0)} MB`
-  })
-
-  // Actions
   async function loadInstallers(): Promise<void> {
     try {
       installers.value = await ListInstallers()
@@ -81,8 +66,6 @@ export const useSourceStore = defineStore('source', () => {
         installerName: detected?.Name ?? null,
         detectedTargets: detected?.Targets ?? [],
       }
-
-      selectedTargetIndex.value = 0
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to analyze source'
       source.value = null
@@ -91,42 +74,28 @@ export const useSourceStore = defineStore('source', () => {
     }
   }
 
-  function selectTarget(index: number): void {
-    if (source.value?.detectedTargets && index < source.value.detectedTargets.length) {
-      selectedTargetIndex.value = index
-    }
-  }
-
   function clearSource(): void {
     source.value = null
-    selectedTargetIndex.value = 0
     error.value = null
   }
 
   function $reset(): void {
     source.value = null
-    selectedTargetIndex.value = 0
     isAnalyzing.value = false
     error.value = null
   }
 
   return {
-    // State
     source,
     installers,
-    selectedTargetIndex,
     isAnalyzing,
     error,
-    // Getters
     hasSource,
     filename,
     detectedInstaller,
-    selectedTarget,
     fileSizeFormatted,
-    // Actions
     loadInstallers,
     setSource,
-    selectTarget,
     clearSource,
     $reset,
   }

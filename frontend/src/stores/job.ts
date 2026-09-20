@@ -5,27 +5,20 @@ import { toast } from 'vue-sonner'
 import { StartJob, CancelJob } from '@flashit/service/jobsservice'
 import { Status } from '@/types'
 import type { Job, JobEvent, StartJobRequest, StepState } from '@/types'
-import { WailsEventNames } from '@/composables'
 
 export const useJobStore = defineStore('job', () => {
-  // State
   const currentJobId = ref<string | null>(null)
   const jobs = ref<Map<string, Job>>(new Map())
-  const progress = ref(0)
-  const currentStep = ref<string | null>(null)
-  const currentMessage = ref<string | null>(null)
   const error = ref<string | null>(null)
   const isStarting = ref(false)
   const isCancelling = ref(false)
   const steps = ref<StepState[]>([])
 
-  // Event subscription handle
   let eventUnsubscribe: (() => void) | null = null
 
   // Buffer for events that arrive before job ID is set
   let pendingEvents: JobEvent[] = []
 
-  // Getters
   const currentJob = computed(() =>
     currentJobId.value ? jobs.value.get(currentJobId.value) ?? null : null
   )
@@ -37,10 +30,7 @@ export const useJobStore = defineStore('job', () => {
   const isFailed = computed(() => status.value === Status.StatusFailed)
   const isPending = computed(() => status.value === Status.StatusPending)
   const isCancelled = computed(() => status.value === Status.StatusCancelled)
-  const isIdle = computed(() => !currentJobId.value || (!isRunning.value && !isPending.value))
-  const currentRunningStep = computed(() => steps.value.find((s) => s.status === 'running'))
 
-  // Actions
   function handleJobEvent(event: JobEvent): void {
     // If we're starting a job but don't have the ID yet, buffer the event
     if (isStarting.value && !currentJobId.value) {
@@ -48,7 +38,6 @@ export const useJobStore = defineStore('job', () => {
       return
     }
 
-    // Only process events for our current job
     if (event.jobId !== currentJobId.value) {
       return
     }
@@ -57,12 +46,10 @@ export const useJobStore = defineStore('job', () => {
   }
 
   function processJobEvent(event: JobEvent): void {
-
     switch (event.type) {
       case 'state': {
         const job = jobs.value.get(event.jobId)
         if (job) {
-          // Map state message to Status enum
           const stateMap: Record<string, Status> = {
             pending: Status.StatusPending,
             running: Status.StatusRunning,
@@ -72,22 +59,18 @@ export const useJobStore = defineStore('job', () => {
           }
           job.Status = stateMap[event.message] ?? job.Status
 
-          // Capture error from failed state
           if (event.error) {
             error.value = event.error
-            // Mark the running step as failed
             const runningStep = steps.value.find((s) => s.status === 'running')
             if (runningStep) {
               runningStep.status = 'failed'
             }
           }
 
-          // Clear cancelling state when we get final status
           if (event.message === 'cancelled' || event.message === 'succeeded' || event.message === 'failed') {
             isCancelling.value = false
           }
 
-          // Show toast notifications on completion
           if (event.message === 'succeeded') {
             toast.success('Flash complete!', {
               description: 'Your bootable drive is ready to use.',
@@ -106,9 +89,6 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'step-start': {
-        currentStep.value = event.step
-        currentMessage.value = event.message
-        // Update step state
         const step = steps.value.find((s) => s.key === event.step)
         if (step) {
           step.status = 'running'
@@ -119,7 +99,6 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'step-end': {
-        // Mark step as completed
         const step = steps.value.find((s) => s.key === event.step)
         if (step) {
           step.status = 'completed'
@@ -129,11 +108,6 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'progress': {
-        progress.value = event.percent
-        if (event.message) {
-          currentMessage.value = event.message
-        }
-        // Update running step progress
         const runningStep = steps.value.find((s) => s.status === 'running')
         if (runningStep) {
           runningStep.progress = event.percent
@@ -144,13 +118,8 @@ export const useJobStore = defineStore('job', () => {
         break
       }
 
-      case 'log':
-        currentMessage.value = event.message
-        break
-
       case 'error': {
         error.value = event.error || event.message
-        // Mark running step as failed
         const runningStep = steps.value.find((s) => s.status === 'running')
         if (runningStep) {
           runningStep.status = 'failed'
@@ -163,7 +132,7 @@ export const useJobStore = defineStore('job', () => {
   function subscribeToEvents(): void {
     if (eventUnsubscribe) return
 
-    eventUnsubscribe = Events.On(WailsEventNames.JOB_EVENT, (ev: Events.WailsEvent) => {
+    eventUnsubscribe = Events.On('job:event', (ev: Events.WailsEvent) => {
       handleJobEvent(ev.data as JobEvent)
     })
   }
@@ -176,20 +145,15 @@ export const useJobStore = defineStore('job', () => {
   async function startJob(request: StartJobRequest): Promise<string> {
     isStarting.value = true
     error.value = null
-    progress.value = 0
-    currentStep.value = null
-    currentMessage.value = null
     steps.value = []
-    pendingEvents = [] // Clear any stale buffered events
+    pendingEvents = []
 
     try {
-      // Ensure we're subscribed to events before starting
       subscribeToEvents()
 
       const response = await StartJob(request)
       currentJobId.value = response.jobId
 
-      // Initialize steps from response
       steps.value = (response.stepInfos || []).map((info) => ({
         key: info.key,
         name: info.name,
@@ -199,7 +163,6 @@ export const useJobStore = defineStore('job', () => {
         message: null,
       }))
 
-      // Create a placeholder job entry
       jobs.value.set(response.jobId, {
         ID: response.jobId,
         Status: Status.StatusPending,
@@ -242,9 +205,6 @@ export const useJobStore = defineStore('job', () => {
 
   function clearCurrentJob(): void {
     currentJobId.value = null
-    progress.value = 0
-    currentStep.value = null
-    currentMessage.value = null
     error.value = null
     steps.value = []
   }
@@ -253,9 +213,6 @@ export const useJobStore = defineStore('job', () => {
     unsubscribeFromEvents()
     currentJobId.value = null
     jobs.value.clear()
-    progress.value = 0
-    currentStep.value = null
-    currentMessage.value = null
     error.value = null
     isStarting.value = false
     isCancelling.value = false
@@ -264,17 +221,12 @@ export const useJobStore = defineStore('job', () => {
   }
 
   return {
-    // State
     currentJobId,
     jobs,
-    progress,
-    currentStep,
-    currentMessage,
     error,
     isStarting,
     isCancelling,
     steps,
-    // Getters
     currentJob,
     status,
     isRunning,
@@ -282,9 +234,6 @@ export const useJobStore = defineStore('job', () => {
     isFailed,
     isPending,
     isCancelled,
-    isIdle,
-    currentRunningStep,
-    // Actions
     subscribeToEvents,
     unsubscribeFromEvents,
     startJob,

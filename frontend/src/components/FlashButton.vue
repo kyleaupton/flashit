@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { Button } from '@/components/ui/button'
 import FlashConfirmDialog from '@/components/FlashConfirmDialog.vue'
 import { useDrivesStore } from '@/stores'
+import { formatSize } from '@/lib/utils'
 
 const props = defineProps<{
   loading?: boolean
@@ -24,13 +25,6 @@ function handleClick() {
 function handleConfirm() {
   dialogOpen.value = false
   emit('click')
-}
-
-function formatSize(bytes: number): string {
-  const gb = bytes / (1024 * 1024 * 1024)
-  if (gb >= 1) return `${gb.toFixed(1)} GB`
-  const mb = bytes / (1024 * 1024)
-  return `${mb.toFixed(0)} MB`
 }
 </script>
 
