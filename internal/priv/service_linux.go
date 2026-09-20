@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/logger"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 type linuxService struct {
@@ -109,11 +110,11 @@ func (d *linuxDiskOps) WriteISO(ctx context.Context, isoPath string, device stri
 	if err != nil {
 		return err
 	}
-	return d.client.WriteImage(ctx, device, abs, fi.Size(), progress)
+	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Source: abs, Size: fi.Size()}, progress)
 }
 
 func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
-	_, err := d.client.FormatDisk(ctx, device, filesystem, volumeName)
+	_, err := d.client.FormatDisk(ctx, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: volumeName})
 	return err
 }
 

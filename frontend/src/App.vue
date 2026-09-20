@@ -10,6 +10,7 @@ import ProgressPanel from '@/components/ProgressPanel.vue'
 import StatusAlert from '@/components/StatusAlert.vue'
 import FlashButton from '@/components/FlashButton.vue'
 import { Toaster } from '@/components/ui/sonner'
+import { OpenHelperSettings } from '@flashit/service/privservice'
 import { toast } from 'vue-sonner'
 import 'vue-sonner/style.css'
 
@@ -118,6 +119,9 @@ onMounted(() => {
           <StatusAlert
             :status="appState"
             :error="jobStore.error"
+            :helper-approval="jobStore.needsHelperApproval"
+            @open-settings="OpenHelperSettings()"
+            @retry="handleStartJob"
           />
 
           <Button

@@ -11,6 +11,7 @@ import (
 	"github.com/kyleaupton/flashit/internal/drives"
 	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/logger"
+	"github.com/kyleaupton/flashit/internal/priv"
 	"github.com/kyleaupton/flashit/internal/service"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -26,6 +27,8 @@ func main() {
 		log.Println("DRY-RUN MODE: Using mock drives, no real disk operations")
 		drives.SetProvider(drives.MockProvider{Drives: drives.DefaultMockDrives()})
 	}
+
+	priv.HelperVersion = Version
 
 	app := application.New(application.Options{
 		Name:        "FlashIt",
@@ -49,6 +52,7 @@ func main() {
 	app.RegisterService(application.NewService(jobsSvc))
 	drivesSvc := service.NewDrivesService()
 	app.RegisterService(application.NewService(drivesSvc))
+	app.RegisterService(application.NewService(service.NewPrivService()))
 
 	// TODO: Add Wails updater service when available in Wails v3
 	// See: https://v3alpha.wails.io/guides/distribution/auto-updates

@@ -53,13 +53,13 @@ func (c *Client) Ping(ctx context.Context) (proto.PingResult, error) {
 	return r, nil
 }
 
-func (c *Client) WriteImage(ctx context.Context, device, source string, size int64, progress ProgressFunc) error {
-	_, err := c.do(ctx, proto.OpWriteImage, proto.WriteImageParams{Device: device, Source: source, Size: size}, progress)
+func (c *Client) WriteImage(ctx context.Context, p proto.WriteImageParams, progress ProgressFunc) error {
+	_, err := c.do(ctx, proto.OpWriteImage, p, progress)
 	return err
 }
 
-func (c *Client) FormatDisk(ctx context.Context, device, filesystem, label string) (string, error) {
-	resp, err := c.do(ctx, proto.OpFormatDisk, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: label}, nil)
+func (c *Client) FormatDisk(ctx context.Context, p proto.FormatDiskParams) (string, error) {
+	resp, err := c.do(ctx, proto.OpFormatDisk, p, nil)
 	if err != nil {
 		return "", err
 	}

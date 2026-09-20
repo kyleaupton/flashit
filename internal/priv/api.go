@@ -9,6 +9,15 @@ import (
 // succeeded for this session.
 var ErrHelperNotRunning = errors.New("privileged helper is not running")
 
+// ErrHelperNeedsApproval means the macOS daemon is registered but the user
+// has not allowed it in System Settings yet. Nothing has touched a disk.
+var ErrHelperNeedsApproval = errors.New("FlashIt's helper needs approval in System Settings > Login Items & Extensions")
+
+// HelperVersion is the version the helper must report in ping for the app
+// to use it; main sets it from the build. On macOS a mismatch makes the app
+// register the daemon again from its own bundle.
+var HelperVersion = "dev"
+
 // ProgressFunc receives (bytesWritten, totalBytes) during a write.
 type ProgressFunc func(bytesWritten, totalBytes uint64)
 
