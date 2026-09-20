@@ -7,6 +7,13 @@ import (
 	"fmt"
 )
 
+// The macOS daemon's launchd label and the socket it serves; the launchd
+// plist and the darwin Taskfile carry the same literals.
+const (
+	DarwinHelperLabel = "dev.kyleupton.flashit.helper"
+	DarwinSocketPath  = "/var/run/dev.kyleupton.flashit.sock"
+)
+
 // ProtocolVersion is sent by the client in ping and checked by the helper.
 // Bump it whenever a request or response shape changes incompatibly.
 const ProtocolVersion = 3

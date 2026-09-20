@@ -169,26 +169,6 @@ func (d diskutil) wholeDisksBehind(ctx context.Context, dev string, depth int) (
 	return out, nil
 }
 
-// partitions lists the partition nodes of a whole disk, in diskutil order.
-func (d diskutil) partitions(ctx context.Context, whole string) ([]string, error) {
-	lst, err := d.list(ctx)
-	if err != nil {
-		return nil, err
-	}
-	name := filepath.Base(whole)
-	for _, disk := range lst.AllDisksAndPartitions {
-		if disk.DeviceIdentifier != name {
-			continue
-		}
-		parts := make([]string, 0, len(disk.Partitions))
-		for _, p := range disk.Partitions {
-			parts = append(parts, "/dev/"+p.DeviceIdentifier)
-		}
-		return parts, nil
-	}
-	return nil, fmt.Errorf("%s is not in diskutil list", whole)
-}
-
 // containersOn lists the synthesized APFS containers whose physical store
 // sits on whole. They hold the disk busy until unmounted, so unmounting a
 // physical disk means unmounting them first.

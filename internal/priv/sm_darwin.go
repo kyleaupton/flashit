@@ -14,10 +14,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"unsafe"
+
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 // helperPlist names the launchd plist in Contents/Library/LaunchDaemons.
-const helperPlist = "dev.kyleupton.flashit.helper.plist"
+const helperPlist = proto.DarwinHelperLabel + ".plist"
 
 type smStatus int
 

@@ -198,14 +198,25 @@ func (a FakeAuth) Authenticate(net.Conn) (helper.Peer, error) {
 	return helper.Peer{UID: a.UID}, nil
 }
 
-// FakeAuthorizer accepts exactly Token and records every call.
+// FakeAuthorizer accepts exactly Token and records every call. Block, when
+// set, makes every call wait until it is closed, like a sheet nobody has
+// answered; Started is closed on the first call.
 type FakeAuthorizer struct {
-	mu    sync.Mutex
-	Token string
-	Calls []proto.Op
+	mu      sync.Mutex
+	Token   string
+	Calls   []proto.Op
+	Block   chan struct{}
+	Started chan struct{}
+	started sync.Once
 }
 
 func (a *FakeAuthorizer) Authorize(op proto.Op, token string) error {
+	if a.Started != nil {
+		a.started.Do(func() { close(a.Started) })
+	}
+	if a.Block != nil {
+		<-a.Block
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Calls = append(a.Calls, op)

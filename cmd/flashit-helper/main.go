@@ -7,6 +7,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/kyleaupton/flashit/internal/helper"
 )
 
 // Version is set at build time via -ldflags="-X main.Version=...".
@@ -35,6 +38,12 @@ func main() {
 
 	if err := serve(ctx, *socket, *idle, log); err != nil {
 		log.Error("exiting", "error", err)
+		// A configuration error will not go away by restarting; exit clean so
+		// launchd (KeepAlive SuccessfulExit=false) leaves the daemon down
+		// until the app registers a fixed build.
+		if errors.Is(err, helper.ErrConfig) {
+			os.Exit(0)
+		}
 		os.Exit(1)
 	}
 }

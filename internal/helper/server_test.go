@@ -111,6 +111,12 @@ func (c *client) callFile(id string, op proto.Op, params any, f *os.File) ([]pro
 	return c.collect(id)
 }
 
+// callFileAsync sends without collecting, for tests that interleave cancel.
+func (c *client) callFileAsync(id string, op proto.Op, params any) {
+	c.t.Helper()
+	c.send(id, op, params)
+}
+
 func (c *client) collect(id string) ([]proto.Response, proto.Response) {
 	c.t.Helper()
 	var progress []proto.Response
@@ -1026,4 +1032,35 @@ func TestServeForeverServesClientsInTurn(t *testing.T) {
 		t.Fatal("ServeForever ignored context cancellation")
 	}
 	fourth.expectClosed()
+}
+
+// A cancel that arrives while the sheet is up must win over the answer,
+// and nothing on the disk may be touched for an op cancelled that way.
+func TestCancelDuringAuthorization(t *testing.T) {
+	for _, approve := range []bool{true, false} {
+		disk := helpertest.NewFakeDisk()
+		az := &helpertest.FakeAuthorizer{Token: "good", Block: make(chan struct{}), Started: make(chan struct{})}
+		opts := testOptions()
+		opts.Authorizer = az
+		c := serve(t, disk, opts)
+		c.ping()
+
+		token := "good"
+		if !approve {
+			token = "forged"
+		}
+		c.callFileAsync("1", proto.OpFormatDisk, proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X", Authorization: token})
+		<-az.Started
+		c.send("2", proto.OpCancel, nil)
+		if resp := c.recv(); resp.ID != "2" || resp.Type != proto.TypeResult {
+			t.Fatalf("cancel reply %+v", resp)
+		}
+		close(az.Block)
+		_, resp := c.collect("1")
+		wantError(t, resp, proto.CodeCancelled)
+		if len(disk.Unmounted) != 0 || len(disk.Formats) != 0 {
+			t.Fatalf("approve=%v: cancelled op touched the disk: unmounted=%v formats=%v", approve, disk.Unmounted, disk.Formats)
+		}
+		c.ping()
+	}
 }

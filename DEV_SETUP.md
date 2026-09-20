@@ -49,9 +49,10 @@ Each flash raises exactly one authorization sheet ("FlashIt needs to write to
 a removable drive."), raised by the helper right before the destructive step.
 
 When the helper's sources change, `task dev` bakes a new version stamp into
-it; the app notices on its next connection, unregisters and registers the
-daemon again. Registering can keep failing for about a minute after an
-unregister; the app retries on its own. No System Settings visit is needed.
+both the app and the helper; the app notices on its next connection,
+unregisters and registers the daemon again. Registering can keep failing
+for about a minute after an unregister; the app retries for up to 30 s per
+attempt and then asks you to try again. No System Settings visit is needed.
 
 ## Watching the helper
 
@@ -93,6 +94,7 @@ sudo rm -f /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist \
 ## Release builds
 
 `task darwin:package` builds `bin/FlashIt.app` signed with
-`APPLE_SIGNING_IDENTITY` (ad hoc when unset) and bakes `APPLE_TEAM_ID` into
-the helper, so it accepts any FlashIt signed by that team. The release
+`APPLE_SIGNING_IDENTITY` and bakes `APPLE_TEAM_ID` into the helper, so it
+accepts any FlashIt signed by that team. Both variables are required: an
+ad-hoc signed bundle would be refused by its own daemon. The release
 workflow then notarizes the bundle.

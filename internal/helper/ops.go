@@ -69,13 +69,23 @@ func (sess *session) resolveTarget(op proto.Op, requested string) (DeviceInfo, e
 }
 
 // authorize asks the host's Authorizer, if any, whether the user approved op.
-// Any failure is reported as unauthorized; the reason stays in the log.
-func (sess *session) authorize(op proto.Op, token string) error {
+// Any failure is reported as unauthorized; the reason stays in the log. The
+// authorizer may block on a sheet it cannot abandon, so a cancel that
+// arrived meanwhile wins over an approval, and nothing is unmounted for it.
+func (sess *session) authorize(ctx context.Context, op proto.Op, token string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	az := sess.s.opts.Authorizer
 	if az == nil {
 		return nil
 	}
-	if err := az.Authorize(op, token); err != nil {
+	err := az.Authorize(op, token)
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		sess.s.opts.Logger.Info("cancelled while authorizing", "op", op)
+		return ctxErr
+	}
+	if err != nil {
 		sess.s.opts.Logger.Warn("user authorization refused", "op", op, "uid", sess.peer.UID, "error", err)
 		return proto.Errorf(proto.CodeUnauthorized, "%s was not authorized by the user", op)
 	}
@@ -117,10 +127,12 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 	if err := validate.Capacity(p.Size, info); err != nil {
 		return err
 	}
-	if err := sess.authorize(proto.OpWriteImage, p.Authorization); err != nil {
+	if err := sess.authorize(ctx, proto.OpWriteImage, p.Authorization); err != nil {
 		return err
 	}
-
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := sess.unmountAll(info); err != nil {
 		return err
 	}
@@ -200,7 +212,10 @@ func (sess *session) formatDisk(ctx context.Context, p proto.FormatDiskParams) (
 	if err := validate.Label(p.Label); err != nil {
 		return nil, err
 	}
-	if err := sess.authorize(proto.OpFormatDisk, p.Authorization); err != nil {
+	if err := sess.authorize(ctx, proto.OpFormatDisk, p.Authorization); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if err := sess.unmountAll(info); err != nil {

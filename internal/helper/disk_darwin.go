@@ -71,8 +71,10 @@ func (d *darwinDisk) SystemDisks() ([]string, error) {
 	return d.du.systemDisks(context.Background(), unix.ByteSliceToString(st.Mntfromname[:]))
 }
 
-func (d *darwinDisk) Partitions(device string) ([]string, error) {
-	return d.du.partitions(context.Background(), device)
+// Partitions reports none: `diskutil unmountDisk` takes the whole disk and
+// everything on it in one call, so there is no per-partition pass here.
+func (d *darwinDisk) Partitions(string) ([]string, error) {
+	return nil, nil
 }
 
 // Unmount takes a device path or a mountpoint. A whole disk is unmounted

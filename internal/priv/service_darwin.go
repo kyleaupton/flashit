@@ -12,8 +12,14 @@ import (
 )
 
 type darwinService struct {
+	// mu guards client and cancel; it is never held while connecting, so
+	// Shutdown can always get it and cut a connect attempt short.
 	mu     sync.Mutex
 	client *Client
+	cancel context.CancelFunc
+	// connecting serializes connect attempts so two ops do not race to
+	// register the daemon.
+	connecting sync.Mutex
 }
 
 func platformService() PrivilegedService { return &darwinService{} }
@@ -28,36 +34,63 @@ func (s *darwinService) EnsureReady(ctx context.Context) error {
 // costs no prompt: caller authentication is silent, and user authorization
 // is per op.
 func (s *darwinService) session(ctx context.Context) (*Client, error) {
+	s.connecting.Lock()
+	defer s.connecting.Unlock()
+
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
+	current := s.client
+	s.mu.Unlock()
+	if current != nil {
 		pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
-		_, err := s.client.Ping(pingCtx)
+		_, err := current.Ping(pingCtx)
 		cancel()
 		if err == nil {
-			return s.client, nil
+			return current, nil
 		}
 		logger.Debug("helper session gone, reconnecting", "error", err)
-		s.client.Close()
-		s.client = nil
+		s.drop(current)
 	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.mu.Lock()
+	s.cancel = cancel
+	s.mu.Unlock()
 	c, err := connectHelper(ctx)
+	s.mu.Lock()
+	s.cancel = nil
+	if err == nil {
+		s.client = c
+	}
+	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("privileged helper ready", "version", expectedHelperVersion())
-	s.client = c
+	logger.Info("privileged helper ready", "version", HelperVersion)
 	return c, nil
+}
+
+func (s *darwinService) drop(c *Client) {
+	s.mu.Lock()
+	if s.client == c {
+		s.client = nil
+	}
+	s.mu.Unlock()
+	c.Close()
 }
 
 func (s *darwinService) Disk() DiskOps { return &darwinDiskOps{s: s} }
 
 func (s *darwinService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.client != nil {
-		s.client.Close()
-		s.client = nil
+	if s.cancel != nil {
+		s.cancel()
+	}
+	c := s.client
+	s.client = nil
+	s.mu.Unlock()
+	if c != nil {
+		c.Close()
 	}
 	return nil
 }

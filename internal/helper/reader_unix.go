@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -92,6 +93,26 @@ func (r *unixReader) next() (message, error) {
 			r.pending = nil
 			return message{}, err
 		}
+	}
+}
+
+// takeFile keeps the first descriptor as an *os.File and closes the rest.
+// An op is handed one image, never a choice of several.
+func takeFile(fds []int) *os.File {
+	var f *os.File
+	for i, fd := range fds {
+		if i == 0 {
+			f = os.NewFile(uintptr(fd), "image")
+			continue
+		}
+		syscall.Close(fd)
+	}
+	return f
+}
+
+func closeFDs(fds []int) {
+	for _, fd := range fds {
+		syscall.Close(fd)
 	}
 }
 

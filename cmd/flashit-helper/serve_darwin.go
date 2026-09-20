@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/helper"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
-const defaultSocket = helper.DefaultSocket
+const defaultSocket = proto.DarwinSocketPath
 
 // The client code requirement arrives as plain values via -ldflags -X: the
 // app's bundle identifier plus either the SHA-1 of the signing certificate
@@ -26,11 +27,11 @@ var (
 func serve(ctx context.Context, socket string, idle time.Duration, log *slog.Logger) error {
 	requirement, err := helper.Requirement(AppIdentifier, LeafSHA1, TeamID)
 	if err != nil {
-		return fmt.Errorf("client code requirement: %w", err)
+		return fmt.Errorf("%w: client code requirement: %v", helper.ErrConfig, err)
 	}
 	auth, err := helper.NewAuth(requirement)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %v", helper.ErrConfig, err)
 	}
 	disk, err := helper.NewDisk(log)
 	if err != nil {

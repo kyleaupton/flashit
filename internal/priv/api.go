@@ -14,8 +14,9 @@ var ErrHelperNotRunning = errors.New("privileged helper is not running")
 var ErrHelperNeedsApproval = errors.New("FlashIt's helper needs approval in System Settings > Login Items & Extensions")
 
 // HelperVersion is the version the helper must report in ping for the app
-// to use it; main sets it from the build. On macOS a mismatch makes the app
-// register the daemon again from its own bundle.
+// to use it. The build stamps it with -ldflags -X, the same value it bakes
+// into the helper; on macOS a mismatch makes the app register the daemon
+// again from its own bundle.
 var HelperVersion = "dev"
 
 // ProgressFunc receives (bytesWritten, totalBytes) during a write.

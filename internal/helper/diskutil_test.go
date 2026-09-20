@@ -201,21 +201,9 @@ func TestSystemDisks(t *testing.T) {
 	}
 }
 
-func TestPartitionsAndContainers(t *testing.T) {
+func TestContainersOn(t *testing.T) {
 	ctx := context.Background()
 	_, du := thisMac(t)
-
-	parts, err := du.partitions(ctx, "/dev/disk4")
-	if err != nil || !reflect.DeepEqual(parts, []string{"/dev/disk4s1", "/dev/disk4s2"}) {
-		t.Fatalf("partitions %v %v", parts, err)
-	}
-	parts, err = du.partitions(ctx, "/dev/disk5")
-	if err != nil || len(parts) != 0 {
-		t.Fatalf("container partitions %v %v", parts, err)
-	}
-	if _, err := du.partitions(ctx, "/dev/disk99"); err == nil {
-		t.Fatal("unknown disk must be an error")
-	}
 
 	containers, err := du.containersOn(ctx, "/dev/disk4")
 	if err != nil || !reflect.DeepEqual(containers, []string{"/dev/disk5"}) {

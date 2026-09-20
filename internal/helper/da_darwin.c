@@ -23,12 +23,15 @@ static DADissenterRef claim_release(DADiskRef disk, void *context) {
 	return DADissenterCreate(kCFAllocatorDefault, kDAReturnBusy, CFSTR("FlashIt is writing this disk"));
 }
 
+static void noop(void *context) { (void)context; }
+
+// Detaches the session from its queue, then waits for anything already on
+// the queue (a late claim_done) to run before the handle goes away.
 static void claim_free(flashit_da_handle *c) {
+	if (c->session) DASessionSetDispatchQueue(c->session, NULL);
+	if (c->queue) dispatch_sync_f(c->queue, NULL, noop);
 	if (c->disk) CFRelease(c->disk);
-	if (c->session) {
-		DASessionSetDispatchQueue(c->session, NULL);
-		CFRelease(c->session);
-	}
+	if (c->session) CFRelease(c->session);
 	if (c->queue) dispatch_release(c->queue);
 	if (c->answered) dispatch_release(c->answered);
 	free(c);

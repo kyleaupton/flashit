@@ -4,8 +4,6 @@ import (
 	"bufio"
 	"errors"
 	"net"
-	"os"
-	"syscall"
 )
 
 var errLineTooLong = errors.New("request line too long")
@@ -48,24 +46,4 @@ func trimNewline(line []byte) []byte {
 		out = out[:len(out)-1]
 	}
 	return out
-}
-
-// takeFile keeps the first descriptor as an *os.File and closes the rest.
-// An op is handed one image, never a choice of several.
-func takeFile(fds []int) *os.File {
-	var f *os.File
-	for i, fd := range fds {
-		if i == 0 {
-			f = os.NewFile(uintptr(fd), "image")
-			continue
-		}
-		syscall.Close(fd)
-	}
-	return f
-}
-
-func closeFDs(fds []int) {
-	for _, fd := range fds {
-		syscall.Close(fd)
-	}
 }
