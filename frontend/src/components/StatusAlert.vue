@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 const props = defineProps<{
   status: AppState
   error?: string | null
-  helperApproval?: boolean
+  tccDenied?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -19,8 +19,8 @@ const showDetails = ref(false)
 
 const isSuccess = computed(() => props.status === 'complete')
 const isCancelled = computed(() => props.status === 'cancelled')
-const isHelperApproval = computed(() => props.status === 'error' && props.helperApproval)
-const isError = computed(() => props.status === 'error' && !props.helperApproval)
+const isTccDenied = computed(() => props.status === 'error' && props.tccDenied)
+const isError = computed(() => props.status === 'error' && !props.tccDenied)
 </script>
 
 <template>
@@ -69,8 +69,8 @@ const isError = computed(() => props.status === 'error' && !props.helperApproval
     </AlertDescription>
   </Alert>
 
-  <!-- Helper approval: the daemon is registered but not yet allowed -->
-  <Alert v-else-if="isHelperApproval" class="approval-alert">
+  <!-- Removable Volumes was refused; nothing has touched the drive -->
+  <Alert v-else-if="isTccDenied" class="approval-alert">
     <svg
       xmlns="http://www.w3.org/2000/svg"
       width="16"
@@ -88,8 +88,9 @@ const isError = computed(() => props.status === 'error' && !props.helperApproval
     <AlertTitle>Permission needed</AlertTitle>
     <AlertDescription>
       <span>
-        FlashIt needs permission to run its helper. Allow FlashIt under
-        Login Items &amp; Extensions, then try again.
+        FlashIt needs access to removable volumes to write your drive. Allow
+        FlashIt under Privacy &amp; Security &rsaquo; Files and Folders &rsaquo;
+        Removable Volumes, then try again.
       </span>
       <div class="approval-actions">
         <Button size="sm" @click="emit('openSettings')">Open System Settings</Button>

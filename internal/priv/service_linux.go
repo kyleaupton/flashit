@@ -121,15 +121,3 @@ func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem
 func (d *linuxDiskOps) Eject(ctx context.Context, device string) error {
 	return d.client.Eject(ctx, device)
 }
-
-type unavailableDiskOps struct{}
-
-func (unavailableDiskOps) WriteISO(context.Context, string, string, ProgressFunc) error {
-	return ErrHelperNotRunning
-}
-
-func (unavailableDiskOps) FormatDisk(context.Context, string, string, string) error {
-	return ErrHelperNotRunning
-}
-
-func (unavailableDiskOps) Eject(context.Context, string) error { return ErrHelperNotRunning }

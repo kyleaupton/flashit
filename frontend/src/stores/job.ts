@@ -3,7 +3,6 @@ import { defineStore } from 'pinia'
 import { Events } from '@wailsio/runtime'
 import { toast } from 'vue-sonner'
 import { StartJob, CancelJob } from '@flashit/service/jobsservice'
-import { HelperStatus } from '@flashit/service/privservice'
 import { Status } from '@/types'
 import type { JobEvent, StartJobRequest, StepState } from '@/types'
 
@@ -14,9 +13,6 @@ export const useJobStore = defineStore('job', () => {
   const isStarting = ref(false)
   const isCancelling = ref(false)
   const steps = ref<StepState[]>([])
-  // The job could not start because the macOS helper is waiting for the
-  // user to allow it in System Settings; nothing has touched the disk.
-  const needsHelperApproval = ref(false)
 
   let eventUnsubscribe: (() => void) | null = null
 
@@ -28,6 +24,9 @@ export const useJobStore = defineStore('job', () => {
   const isFailed = computed(() => status.value === Status.StatusFailed)
   const isPending = computed(() => status.value === Status.StatusPending)
   const isCancelled = computed(() => status.value === Status.StatusCancelled)
+  // The helper refused before touching the drive because macOS denied FlashIt
+  // access to removable volumes; the user can grant it and try again.
+  const tccDenied = computed(() => /\btcc_denied\b/.test(error.value ?? ''))
 
   function handleJobEvent(event: JobEvent): void {
     // If we're starting a job but don't have the ID yet, buffer the event
@@ -143,7 +142,6 @@ export const useJobStore = defineStore('job', () => {
     status.value = null
     steps.value = []
     pendingEvents = []
-    needsHelperApproval.value = false
 
     try {
       subscribeToEvents()
@@ -172,18 +170,9 @@ export const useJobStore = defineStore('job', () => {
       return response.jobId
     } catch (e) {
       error.value = e instanceof Error ? e.message : 'Failed to start job'
-      needsHelperApproval.value = await helperNeedsApproval()
       throw e
     } finally {
       isStarting.value = false
-    }
-  }
-
-  async function helperNeedsApproval(): Promise<boolean> {
-    try {
-      return (await HelperStatus()) === 'needs-approval'
-    } catch {
-      return false
     }
   }
 
@@ -211,7 +200,6 @@ export const useJobStore = defineStore('job', () => {
     status.value = null
     error.value = null
     steps.value = []
-    needsHelperApproval.value = false
   }
 
   function $reset(): void {
@@ -223,7 +211,6 @@ export const useJobStore = defineStore('job', () => {
     isCancelling.value = false
     steps.value = []
     pendingEvents = []
-    needsHelperApproval.value = false
   }
 
   return {
@@ -233,7 +220,7 @@ export const useJobStore = defineStore('job', () => {
     isStarting,
     isCancelling,
     steps,
-    needsHelperApproval,
+    tccDenied,
     isRunning,
     isComplete,
     isFailed,

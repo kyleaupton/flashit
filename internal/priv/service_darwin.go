@@ -4,101 +4,100 @@ package priv
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/kyleaupton/flashit/internal/logger"
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
+// privacyPane is the System Settings pane where Removable Volumes is granted.
+const privacyPane = "x-apple.systempreferences:com.apple.preference.security?Privacy_RemovableVolume"
+
 type darwinService struct {
-	// mu guards client and cancel; it is never held while connecting, so
-	// Shutdown can always get it and cut a connect attempt short.
-	mu     sync.Mutex
-	client *Client
-	cancel context.CancelFunc
-	// connecting serializes connect attempts so two ops do not race to
-	// register the daemon.
-	connecting sync.Mutex
+	mu         sync.Mutex
+	proc       *helperProcess
+	client     *Client
+	findHelper func() (string, error)
 }
 
-func platformService() PrivilegedService { return &darwinService{} }
+func platformService() PrivilegedService { return &darwinService{findHelper: findHelper} }
 
+// EnsureReady reuses a live helper and otherwise spawns one. Spawning costs
+// no prompt: the helper runs as the user, and the sheet comes per op.
 func (s *darwinService) EnsureReady(ctx context.Context) error {
-	_, err := s.session(ctx)
-	return err
-}
-
-// session returns the live client, reconnecting when the daemon dropped the
-// previous one (it ends a session that goes quiet between ops). Reconnecting
-// costs no prompt: caller authentication is silent, and user authorization
-// is per op.
-func (s *darwinService) session(ctx context.Context) (*Client, error) {
-	s.connecting.Lock()
-	defer s.connecting.Unlock()
-
 	s.mu.Lock()
-	current := s.client
-	s.mu.Unlock()
-	if current != nil {
-		pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
-		_, err := current.Ping(pingCtx)
+	defer s.mu.Unlock()
+
+	if s.client != nil {
+		pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		_, err := s.client.Ping(pingCtx)
 		cancel()
 		if err == nil {
-			return current, nil
+			return nil
 		}
-		logger.Debug("helper session gone, reconnecting", "error", err)
-		s.drop(current)
+		logger.Debug("helper gone, respawning", "error", err)
+		s.dropClient()
 	}
 
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-	s.mu.Lock()
-	s.cancel = cancel
-	s.mu.Unlock()
-	c, err := connectHelper(ctx)
-	s.mu.Lock()
-	s.cancel = nil
-	if err == nil {
-		s.client = c
-	}
-	s.mu.Unlock()
+	path, err := s.findHelper()
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("start helper: %w", err)
 	}
-	logger.Info("privileged helper ready", "version", HelperVersion)
-	return c, nil
-}
-
-func (s *darwinService) drop(c *Client) {
-	s.mu.Lock()
-	if s.client == c {
-		s.client = nil
+	proc, err := spawnHelper(path)
+	if err != nil {
+		return err
 	}
-	s.mu.Unlock()
-	c.Close()
-}
-
-func (s *darwinService) Disk() DiskOps { return &darwinDiskOps{s: s} }
-
-func (s *darwinService) Shutdown(ctx context.Context) error {
-	s.mu.Lock()
-	if s.cancel != nil {
-		s.cancel()
+	client := NewClient(proc.conn)
+	info, err := client.Ping(ctx)
+	if err != nil {
+		client.Close()
+		proc.release()
+		return fmt.Errorf("helper handshake: %w", err)
 	}
-	c := s.client
-	s.client = nil
-	s.mu.Unlock()
-	if c != nil {
-		c.Close()
-	}
+	logger.Info("helper ready", "version", info.Version, "protocol", info.Protocol, "pid", proc.cmd.Process.Pid)
+	s.proc = proc
+	s.client = client
 	return nil
 }
 
-type darwinDiskOps struct {
-	s *darwinService
+func (s *darwinService) Disk() DiskOps {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.client == nil {
+		return unavailableDiskOps{}
+	}
+	return &darwinDiskOps{client: s.client}
 }
 
+func (s *darwinService) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dropClient()
+	return nil
+}
+
+func (s *darwinService) dropClient() {
+	if s.client != nil {
+		s.client.Close()
+		s.client = nil
+	}
+	if s.proc != nil {
+		s.proc.release()
+		s.proc = nil
+	}
+}
+
+type darwinDiskOps struct {
+	client *Client
+}
+
+// WriteISO sends the open image and a fresh AuthorizationRef's external
+// form; the helper raises the sheet on that ref right before the write. The
+// ref is destroyed when the op returns, whatever happened.
 func (d *darwinDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
 	image, err := os.Open(isoPath)
 	if err != nil {
@@ -109,56 +108,30 @@ func (d *darwinDiskOps) WriteISO(ctx context.Context, isoPath string, device str
 	if err != nil {
 		return err
 	}
-	c, err := d.s.session(ctx)
-	if err != nil {
-		return err
-	}
 	auth, err := newAuthorization()
 	if err != nil {
 		return err
 	}
 	defer auth.Free()
-	return c.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size(), Authorization: auth.Token}, image, progress)
+	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size(), Authorization: auth.Token}, image, progress)
 }
 
 func (d *darwinDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
-	c, err := d.s.session(ctx)
-	if err != nil {
-		return err
-	}
 	auth, err := newAuthorization()
 	if err != nil {
 		return err
 	}
 	defer auth.Free()
-	_, err = c.FormatDisk(ctx, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: volumeName, Authorization: auth.Token})
+	_, err = d.client.FormatDisk(ctx, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: volumeName, Authorization: auth.Token})
 	return err
 }
 
 func (d *darwinDiskOps) Eject(ctx context.Context, device string) error {
-	c, err := d.s.session(ctx)
-	if err != nil {
-		return err
-	}
-	return c.Eject(ctx, device)
+	return d.client.Eject(ctx, device)
 }
 
-// HelperStatus reports the daemon's registration as the frontend needs it:
-// ready, needs-approval or not-installed.
-func HelperStatus() (string, error) {
-	switch smDaemonStatus() {
-	case smEnabled:
-		return "ready", nil
-	case smRequiresApproval:
-		return "needs-approval", nil
-	default:
-		return "not-installed", nil
-	}
-}
-
-// OpenHelperSettings shows System Settings > Login Items & Extensions, where
-// the user approves the daemon.
-func OpenHelperSettings() error {
-	smOpenSettings()
-	return nil
+// OpenPrivacySettings shows the Removable Volumes list under Privacy &
+// Security, where a user who clicked Don't Allow can let FlashIt in.
+func OpenPrivacySettings() error {
+	return exec.Command("/usr/bin/open", privacyPane).Run()
 }

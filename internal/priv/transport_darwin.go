@@ -3,192 +3,132 @@
 package priv
 
 import (
-	"context"
-	"errors"
+	"bytes"
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/logger"
-	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 const (
-	dialTimeout = 2 * time.Second
-	pingTimeout = 5 * time.Second
-	// connectBudget bounds one attempt to reach a usable helper, so a job
-	// start never freezes the UI for longer; the caller gets a retriable
-	// error and the daemon keeps coming up in the background.
-	connectBudget = 30 * time.Second
-	// How long a freshly registered daemon gets to bind its socket, and how
-	// long a registered one that is not answering gets before the app
-	// concludes launchd cannot start it.
-	socketGrace  = 15 * time.Second
-	restartGrace = 5 * time.Second
-	// register() keeps failing with EPERM for a while after an unregister.
-	// That patience is only spent right after an unregister of our own; a
-	// fresh registration that keeps failing is reported quickly.
-	registerAfterUnregister = 25 * time.Second
-	registerFresh           = 6 * time.Second
-	registerInterval        = 2 * time.Second
-	dialInterval            = 250 * time.Millisecond
+	helperName = "flashit-helper"
+	// How long a released helper gets to see EOF on its socket and leave on
+	// its own before it is killed. It is the app's own child, same uid, so
+	// killing it is always allowed.
+	exitGrace = 5 * time.Second
 )
 
-var (
-	errStaleHelper = errors.New("helper is not the one in this bundle")
-	errHelperBusy  = errors.New("another FlashIt instance is using the helper")
-
-	// ErrHelperNotReady means the daemon is being registered or restarted and
-	// did not come up within the budget; the same request will work once it
-	// has.
-	ErrHelperNotReady = errors.New("FlashIt's helper is still starting; try again in a minute")
-)
-
-// legacyHelperPlist is where the SMJobBless helper of earlier builds was
-// installed, under the same launchd label. SMAppService reports it as
-// enabled, so it has to go before this daemon can be registered.
-const legacyHelperPlist = "/Library/LaunchDaemons/" + proto.DarwinHelperLabel + ".plist"
-
-// connectHelper returns a client whose helper answered ping as root, speaks
-// this protocol and carries this build's version. Anything else means the
-// daemon launchd runs is missing, stale or unlaunchable, and the fix is the
-// same each time: register it again from this bundle. It returns within
-// connectBudget.
-func connectHelper(parent context.Context) (*Client, error) {
-	ctx, cancel := context.WithTimeout(parent, connectBudget)
-	defer cancel()
-	c, err := connectOnce(ctx)
-	if err != nil && parent.Err() == nil && errors.Is(err, context.DeadlineExceeded) {
-		logger.Warn("helper did not come up within the budget", "error", err)
-		return nil, ErrHelperNotReady
-	}
-	return c, err
+// helperProcess is one spawned helper and the socketpair end it serves.
+type helperProcess struct {
+	conn net.Conn
+	cmd  *exec.Cmd
+	done chan error
 }
 
-func connectOnce(ctx context.Context) (*Client, error) {
-	c, err := dialAndPing(ctx)
-	if err == nil {
-		return c, nil
+// findHelper looks next to the running executable, which is Contents/MacOS
+// in the bundle, then in its helpers/ directory. Never the working directory.
+func findHelper() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
 	}
-	if errors.Is(err, errHelperBusy) {
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = resolved
+	}
+	exeDir := filepath.Dir(exe)
+	candidates := []string{
+		filepath.Join(exeDir, helperName),
+		filepath.Join(exeDir, "helpers", helperName),
+	}
+	for _, p := range candidates {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("helper not found at %v", candidates)
+}
+
+// spawnHelper starts the helper at path with one end of a socketpair on fd 3
+// and returns the other end. The helper serves that socket until it reads
+// EOF or goes idle; its stdout and stderr land in the app's log.
+func spawnHelper(path string) (*helperProcess, error) {
+	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
 		return nil, err
 	}
-	logger.Info("helper not usable, checking its registration", "error", err)
+	syscall.CloseOnExec(fds[0])
+	syscall.CloseOnExec(fds[1])
+	app := os.NewFile(uintptr(fds[0]), "helper")
+	child := os.NewFile(uintptr(fds[1]), "app")
 
-	switch st := smDaemonStatus(); st {
-	case smRequiresApproval:
-		return nil, ErrHelperNeedsApproval
-	case smEnabled:
-		if _, statErr := os.Stat(legacyHelperPlist); statErr == nil {
-			return nil, fmt.Errorf("an old FlashIt helper is installed at %s; remove it (see DEV_SETUP.md) and try again", legacyHelperPlist)
-		}
-		if errors.Is(err, errStaleHelper) {
-			break
-		}
-		// Registered and supposedly running; launchd may still be starting
-		// it. If it never binds, its binary was replaced and launchd will not
-		// launch it until it is registered again.
-		logger.Info("helper is registered but not answering, waiting for it")
-		if c, err := dialUntil(ctx, restartGrace); err == nil {
-			return c, nil
-		} else if ctx.Err() != nil {
-			return nil, err
-		}
-	case smNotFound, smNotRegistered:
-		if err := registerUntilDone(ctx, registerFresh); err != nil {
-			return nil, err
-		}
-		return dialUntil(ctx, socketGrace)
+	cmd := exec.Command(path)
+	cmd.ExtraFiles = []*os.File{child}
+	out := &helperLog{}
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := cmd.Start(); err != nil {
+		app.Close()
+		child.Close()
+		return nil, fmt.Errorf("start helper: %w", err)
 	}
+	child.Close()
+	h := &helperProcess{cmd: cmd, done: make(chan error, 1)}
+	go func() { h.done <- cmd.Wait() }()
 
-	logger.Info("re-registering the helper")
-	if err := smUnregister(); err != nil {
-		logger.Warn("unregister failed, registering anyway", "error", err)
-	}
-	if err := registerUntilDone(ctx, registerAfterUnregister); err != nil {
+	conn, err := net.FileConn(app)
+	app.Close()
+	if err != nil {
+		h.release()
 		return nil, err
 	}
-	return dialUntil(ctx, socketGrace)
+	h.conn = conn
+	return h, nil
 }
 
-// registerUntilDone registers the daemon, retrying EPERM for up to patience.
-// Approval pending is the user's move and is reported at once.
-func registerUntilDone(ctx context.Context, patience time.Duration) error {
-	deadline := time.Now().Add(patience)
+// release closes the session, which is the helper's cue to exit, and kills
+// it if it has not left within exitGrace.
+func (h *helperProcess) release() {
+	if h.conn != nil {
+		h.conn.Close()
+		h.conn = nil
+	}
+	go func() {
+		if !h.wait(exitGrace) {
+			logger.Warn("helper did not exit after the session closed, killing it", "pid", h.cmd.Process.Pid)
+			_ = h.cmd.Process.Kill()
+		}
+	}()
+}
+
+// wait blocks until the helper has exited or bound passes. The exit status
+// is put back so later callers see it too.
+func (h *helperProcess) wait(bound time.Duration) bool {
+	select {
+	case err := <-h.done:
+		h.done <- err
+		return true
+	case <-time.After(bound):
+		return false
+	}
+}
+
+// helperLog forwards each line the helper prints to the app's logger.
+type helperLog struct {
+	buf []byte
+}
+
+func (w *helperLog) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
 	for {
-		err := smRegister()
-		st := smDaemonStatus()
-		logger.Info("register helper", "status", st, "error", err)
-		if err == nil && st == smEnabled {
-			return nil
+		i := bytes.IndexByte(w.buf, '\n')
+		if i < 0 {
+			return len(p), nil
 		}
-		if st == smRequiresApproval {
-			return ErrHelperNeedsApproval
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("%w (status %s: %v)", ErrHelperNotReady, st, err)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(registerInterval):
-		}
+		logger.Info("helper: " + string(w.buf[:i]))
+		w.buf = w.buf[i+1:]
 	}
-}
-
-// dialUntil keeps dialing for up to patience. busy is retried too: the
-// daemon answers busy for a moment while it tears down the session a
-// previous client of ours just closed.
-func dialUntil(ctx context.Context, patience time.Duration) (*Client, error) {
-	deadline := time.Now().Add(patience)
-	for {
-		c, err := dialAndPing(ctx)
-		if err == nil {
-			return c, nil
-		}
-		if time.Now().After(deadline) {
-			return nil, err
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(dialInterval):
-		}
-	}
-}
-
-// dialAndPing connects and runs the handshake. A helper that refuses the
-// connection, speaks another protocol or reports another version is stale.
-func dialAndPing(ctx context.Context) (*Client, error) {
-	conn, err := net.DialTimeout("unix", proto.DarwinSocketPath, dialTimeout)
-	if err != nil {
-		return nil, fmt.Errorf("connect to helper: %w", err)
-	}
-	c := NewClient(conn)
-	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
-	info, err := c.Ping(pingCtx)
-	cancel()
-	if err != nil {
-		c.Close()
-		var pe *proto.Error
-		if errors.As(err, &pe) {
-			switch pe.Code {
-			case proto.CodeBusy:
-				return nil, errHelperBusy
-			case proto.CodeVersionMismatch, proto.CodeUnauthorized:
-				return nil, fmt.Errorf("%w: %v", errStaleHelper, err)
-			}
-		}
-		return nil, fmt.Errorf("helper handshake: %w", err)
-	}
-	if info.EUID != 0 {
-		c.Close()
-		return nil, fmt.Errorf("helper is running as uid %d, not root", info.EUID)
-	}
-	if info.Version != HelperVersion {
-		c.Close()
-		return nil, fmt.Errorf("%w: helper is %q, this build wants %q", errStaleHelper, info.Version, HelperVersion)
-	}
-	return c, nil
 }
