@@ -72,7 +72,7 @@ func (c *client) sendFDs(id string, op proto.Op, params any, fds []int) {
 		}
 		return
 	}
-	if _, _, err := c.conn.(*helpertest.SyncConn).WriteMsgUnix(line, syscall.UnixRights(fds...), nil); err != nil {
+	if _, _, err := c.conn.(*helpertest.SyncConn).WriteMsgUnix(line, helpertest.Rights(fds...), nil); err != nil {
 		c.t.Fatalf("send %s with fds: %v", op, err)
 	}
 }
