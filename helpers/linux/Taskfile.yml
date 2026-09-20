@@ -1,0 +1,23 @@
+version: "3"
+
+vars:
+  HELPER_NAME: "flashit-helper"
+  BUILD_DIR: "../../bin/helpers"
+
+tasks:
+  build:
+    summary: Build the Linux privileged helper
+    cmds:
+      - task: clean
+      - task: compile
+
+  clean:
+    summary: Remove old build artifacts
+    cmds:
+      - rm -f {{.BUILD_DIR}}/{{.HELPER_NAME}}
+
+  compile:
+    summary: Compile the helper binary
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build {{.BUILD_FLAGS}} -o {{.BUILD_DIR}}/{{.HELPER_NAME}} .

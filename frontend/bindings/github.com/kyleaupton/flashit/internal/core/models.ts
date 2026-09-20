@@ -24,7 +24,7 @@ export class Plan {
      * UI metadata for steps
      */
     "stepInfos": StepInfo[];
-    "meta"?: { [_: string]: any };
+    "meta"?: { [_ in string]?: any };
 
     /** Creates a new Plan instance. */
     constructor($$source: Partial<Plan> = {}) {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/google/uuid"
@@ -17,6 +18,11 @@ import (
 // Prepare clones the ISO to a neutral location to bypass TCC restrictions.
 // The privileged helper cannot read TCC-protected directories (like ~/Downloads)
 // even when running as root. APFS clone is near-instant for large files.
+//
+// This is only needed on macOS. On other platforms the privileged helper can
+// read the source ISO directly, so Prepare is a no-op and Write uses the
+// original ISO path. (Cloning on Linux would also fail when TempDir is a small
+// tmpfs: a multi-GB ISO won't fit in RAM.)
 type Prepare struct{}
 
 func (Prepare) Key() string         { return "preparing" }
@@ -26,6 +32,12 @@ func (Prepare) HasProgress() bool   { return false }
 func (Prepare) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {
 		return pipeline.Simulate(ctx, e, 1*time.Second, 5)
+	}
+
+	// Only macOS needs the ISO clone (TCC workaround). Elsewhere the helper
+	// reads the source ISO directly, so skip it and let Write use ISOPath.
+	if runtime.GOOS != "darwin" {
+		return nil
 	}
 
 	e.Emit(core.Event{Type: "log", Message: "Preparing ISO..."})

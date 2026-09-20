@@ -2,6 +2,9 @@ version: '3'
 
 includes:
   common: ../Taskfile.yml
+  helper:
+    taskfile: ../../helpers/linux/Taskfile.yml
+    dir: ../../helpers/linux
 
 tasks:
   build:
@@ -15,8 +18,14 @@ tasks:
           PRODUCTION:
             ref: .PRODUCTION
       - task: common:generate:icons
+      - task: build:helper
     cmds:
       - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/{{.APP_NAME}}
+
+  build:helper:
+    summary: Build the privileged helper
+    cmds:
+      - task: helper:build
     vars:
       BUILD_FLAGS: '{{if eq .PRODUCTION "true"}}-tags production -trimpath -buildvcs=false -ldflags="-w -s"{{else}}-buildvcs=false -gcflags=all="-l"{{end}}'
     env:
