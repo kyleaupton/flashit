@@ -27,8 +27,11 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 - Vue 3 + TypeScript 5.9 + Vite 7, Pinia, Tailwind 4, reka-ui/shadcn-vue
 - Task (`Taskfile.yml`) drives build and dev
 
-WIM reading, splitting and LZX decompression are pure Go in `internal/wim`.
-There is no CGO and no wimlib dependency anywhere in the Go code.
+WIM reading, splitting and LZX decompression are pure Go in `internal/wim`;
+there is no wimlib dependency. The one cgo package is the macOS
+privileged-helper client `internal/priv/macos/xpc`, behind the `flashitxpc`
+build tag. Every macOS build must set that tag, or `priv.NewClient` compiles to
+the stub in `internal/priv/macos/client_darwin_noxpc.go` and returns nil.
 
 ## Layout
 
@@ -58,10 +61,12 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 
 ```bash
 task dev                  # hot-reload dev build
-task build                # build for the host OS into bin/
+task build                # build for the host OS into bin/ (sets flashitxpc on macOS)
 go test ./...             # tests live in internal/pipeline, internal/iso, internal/drives (linux-only)
-wails3 generate bindings -ts   # regenerate frontend/bindings after changing a service
-cd frontend && npm run type-check && npm run build
+go build -tags flashitxpc ./...   # on macOS, to compile the real XPC client
+wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
+cd frontend && npm run build      # main.go embeds frontend/dist, so build it before any go build
+cd frontend && npm run type-check
 ```
 
 `helpers/linux` is a separate module and only builds for Linux:

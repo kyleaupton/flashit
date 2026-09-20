@@ -4,11 +4,11 @@ import { Events } from '@wailsio/runtime'
 import { toast } from 'vue-sonner'
 import { StartJob, CancelJob } from '@flashit/service/jobsservice'
 import { Status } from '@/types'
-import type { Job, JobEvent, StartJobRequest, StepState } from '@/types'
+import type { JobEvent, StartJobRequest, StepState } from '@/types'
 
 export const useJobStore = defineStore('job', () => {
   const currentJobId = ref<string | null>(null)
-  const jobs = ref<Map<string, Job>>(new Map())
+  const status = ref<Status | null>(null)
   const error = ref<string | null>(null)
   const isStarting = ref(false)
   const isCancelling = ref(false)
@@ -18,12 +18,6 @@ export const useJobStore = defineStore('job', () => {
 
   // Buffer for events that arrive before job ID is set
   let pendingEvents: JobEvent[] = []
-
-  const currentJob = computed(() =>
-    currentJobId.value ? jobs.value.get(currentJobId.value) ?? null : null
-  )
-
-  const status = computed((): Status | null => currentJob.value?.Status ?? null)
 
   const isRunning = computed(() => status.value === Status.StatusRunning)
   const isComplete = computed(() => status.value === Status.StatusSucceeded)
@@ -48,42 +42,39 @@ export const useJobStore = defineStore('job', () => {
   function processJobEvent(event: JobEvent): void {
     switch (event.type) {
       case 'state': {
-        const job = jobs.value.get(event.jobId)
-        if (job) {
-          const stateMap: Record<string, Status> = {
-            pending: Status.StatusPending,
-            running: Status.StatusRunning,
-            succeeded: Status.StatusSucceeded,
-            failed: Status.StatusFailed,
-            cancelled: Status.StatusCancelled,
-          }
-          job.Status = stateMap[event.message] ?? job.Status
+        const stateMap: Record<string, Status> = {
+          pending: Status.StatusPending,
+          running: Status.StatusRunning,
+          succeeded: Status.StatusSucceeded,
+          failed: Status.StatusFailed,
+          cancelled: Status.StatusCancelled,
+        }
+        status.value = stateMap[event.message] ?? status.value
 
-          if (event.error) {
-            error.value = event.error
-            const runningStep = steps.value.find((s) => s.status === 'running')
-            if (runningStep) {
-              runningStep.status = 'failed'
-            }
+        if (event.error) {
+          error.value = event.error
+          const runningStep = steps.value.find((s) => s.status === 'running')
+          if (runningStep) {
+            runningStep.status = 'failed'
           }
+        }
 
-          if (event.message === 'cancelled' || event.message === 'succeeded' || event.message === 'failed') {
-            isCancelling.value = false
-          }
+        if (event.message === 'cancelled' || event.message === 'succeeded' || event.message === 'failed') {
+          isCancelling.value = false
+        }
 
-          if (event.message === 'succeeded') {
-            toast.success('Flash complete!', {
-              description: 'Your bootable drive is ready to use.',
-            })
-          } else if (event.message === 'failed') {
-            toast.error('Flash failed', {
-              description: event.error || 'Check the error details for more information.',
-            })
-          } else if (event.message === 'cancelled') {
-            toast.info('Flash cancelled', {
-              description: 'The operation was cancelled.',
-            })
-          }
+        if (event.message === 'succeeded') {
+          toast.success('Flash complete!', {
+            description: 'Your bootable drive is ready to use.',
+          })
+        } else if (event.message === 'failed') {
+          toast.error('Flash failed', {
+            description: event.error || 'Check the error details for more information.',
+          })
+        } else if (event.message === 'cancelled') {
+          toast.info('Flash cancelled', {
+            description: 'The operation was cancelled.',
+          })
         }
         break
       }
@@ -145,6 +136,7 @@ export const useJobStore = defineStore('job', () => {
   async function startJob(request: StartJobRequest): Promise<string> {
     isStarting.value = true
     error.value = null
+    status.value = null
     steps.value = []
     pendingEvents = []
 
@@ -163,10 +155,7 @@ export const useJobStore = defineStore('job', () => {
         message: null,
       }))
 
-      jobs.value.set(response.jobId, {
-        ID: response.jobId,
-        Status: Status.StatusPending,
-      })
+      status.value = Status.StatusPending
 
       // Replay any events that arrived before we had the job ID
       const eventsToReplay = pendingEvents.filter((e) => e.jobId === response.jobId)
@@ -205,6 +194,7 @@ export const useJobStore = defineStore('job', () => {
 
   function clearCurrentJob(): void {
     currentJobId.value = null
+    status.value = null
     error.value = null
     steps.value = []
   }
@@ -212,7 +202,7 @@ export const useJobStore = defineStore('job', () => {
   function $reset(): void {
     unsubscribeFromEvents()
     currentJobId.value = null
-    jobs.value.clear()
+    status.value = null
     error.value = null
     isStarting.value = false
     isCancelling.value = false
@@ -222,13 +212,11 @@ export const useJobStore = defineStore('job', () => {
 
   return {
     currentJobId,
-    jobs,
+    status,
     error,
     isStarting,
     isCancelling,
     steps,
-    currentJob,
-    status,
     isRunning,
     isComplete,
     isFailed,

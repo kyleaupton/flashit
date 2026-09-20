@@ -17,11 +17,6 @@ export enum Status {
   StatusCancelled = 'cancelled',
 }
 
-export interface Job {
-  ID: string
-  Status: Status
-}
-
 /** Event payload from backend job:event emissions */
 export interface JobEvent {
   jobId: string

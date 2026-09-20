@@ -31,12 +31,25 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
       - name: Install Linux dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+
+      # main.go embeds frontend/dist, which is gitignored, so the Go steps
+      # below need it built first.
+      - name: Build frontend
+        run: npm ci && npm run build
+        working-directory: frontend
 
       - name: Check formatting
         run: |
@@ -55,6 +68,14 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+      # Every real macOS build sets flashitxpc; without it the XPC client
+      # compiles as a stub and the cgo path is never checked.
+      - name: Vet and build with flashitxpc
+        if: runner.os == 'macOS'
+        run: |
+          go vet -tags flashitxpc ./...
+          go build -tags flashitxpc ./...
 
       - name: Vet helper (linux)
         run: GOOS=linux go vet ./...

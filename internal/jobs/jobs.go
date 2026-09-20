@@ -2,10 +2,12 @@ package jobs
 
 import (
 	"context"
-	"github.com/kyleaupton/flashit/internal/core"
-	"github.com/kyleaupton/flashit/internal/logger"
+	"errors"
 	"sync"
 	"time"
+
+	"github.com/kyleaupton/flashit/internal/core"
+	"github.com/kyleaupton/flashit/internal/logger"
 )
 
 type Status string
@@ -22,7 +24,6 @@ type Job struct {
 	ID        string
 	Plan      *core.Plan
 	Status    Status
-	Progress  float64
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -72,6 +73,10 @@ func (m *Manager) Cancel(jobID string) bool {
 }
 
 func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) {
+	if plan == nil || plan.Runnable == nil {
+		return "", errors.New("plan has no runnable pipeline")
+	}
+
 	// Create a cancellable context for this job
 	// We don't use the passed ctx directly because it may be cancelled when the RPC returns
 	jobCtx, cancel := context.WithCancel(context.Background())
