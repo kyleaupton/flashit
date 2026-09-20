@@ -87,7 +87,7 @@ jobs:
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           GOARCH: ${{ matrix.arch }}
         run: |
-          task darwin:package VERSION=${{ steps.version.outputs.VERSION }} PRODUCTION=true ARCH=${{ matrix.arch }}
+          task darwin:package VERSION=${{ steps.version.outputs.VERSION }} ARCH=${{ matrix.arch }}
 
       - name: Verify code signature
         run: |
@@ -229,7 +229,7 @@ jobs:
         run: task windows:build:helper
 
       - name: Build application
-        run: task windows:build PRODUCTION=true VERSION=${{ steps.version.outputs.VERSION }}
+        run: task windows:build VERSION=${{ steps.version.outputs.VERSION }}
 
       - name: Create NSIS installer
         shell: pwsh
