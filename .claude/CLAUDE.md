@@ -132,10 +132,19 @@ to appear in `drives.ListRemovable`. Enforced in `Plan`:
 The Go helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block
 nodes, non-removable disks, any whole disk backing the running system,
-sources that are not regular files owned by the caller with the claimed
-size, images larger than the device, and labels outside
-`^[A-Za-z0-9_ -]{1,11}$`. Only `fat32` formats. Validation runs before any
-prompt, so a refused request never costs the user a sheet.
+images larger than the device, and labels outside `^[A-Za-z0-9_ -]{1,11}$`.
+Only `fat32` formats. Validation runs before any prompt, so a refused
+request never costs the user a sheet.
+
+The helper never opens an image by path. The app opens the ISO itself and
+passes the open descriptor with the `write_image` line over the unix socket
+(`SCM_RIGHTS`); the helper fstats what it received, requires a regular file
+of the claimed size, and streams from it. That is the confused-deputy fix:
+the helper can only write what the app could already read, so no ownership
+check is needed (and none would work on macOS external volumes, which mount
+with ownership ignored). A request without a descriptor, or one whose
+descriptor is a pipe, directory or device, is refused; extra descriptors are
+closed unread.
 
 Linux: removable means sysfs `removable` or a USB ancestor; system disks are
 resolved from `/`, `/boot`, `/home` and friends through dm/md slaves (btrfs
@@ -152,9 +161,12 @@ Virtual (disk images and synthesized APFS containers are refused). The system
 disks are the physical stores behind the APFS container mounted at `/`.
 `write_image` and `format_disk` carry the external form of an
 `AuthorizationRef`; the helper redeems it for the right
-`dev.kyleupton.flashit.write` (which it creates on first start), so the
-password sheet is raised by the helper right before the destructive step, one
-per flash. Raw writes go to `/dev/rdiskN` under a Disk Arbitration claim.
+`dev.kyleupton.flashit.write`, so the password sheet is raised by the helper
+right before the destructive step, one per flash. Because `config.add` is
+open to anyone, the helper rewrites that right's rule on every start and
+reads it back (class user, group admin, authenticate-user, allow-root false,
+shared false, timeout at most 30) before serving, and checks it again before
+every use; a planted permissive rule is refused, not honored. Raw writes go to `/dev/rdiskN` under a Disk Arbitration claim.
 
 ## Docs
 

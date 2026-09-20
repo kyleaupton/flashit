@@ -5,7 +5,6 @@ package priv
 import (
 	"context"
 	"os"
-	"path/filepath"
 	"sync"
 
 	"github.com/kyleaupton/flashit/internal/logger"
@@ -68,11 +67,12 @@ type darwinDiskOps struct {
 }
 
 func (d *darwinDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
-	abs, err := filepath.Abs(isoPath)
+	image, err := os.Open(isoPath)
 	if err != nil {
 		return err
 	}
-	fi, err := os.Stat(abs)
+	defer image.Close()
+	fi, err := image.Stat()
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (d *darwinDiskOps) WriteISO(ctx context.Context, isoPath string, device str
 		return err
 	}
 	defer auth.Free()
-	return c.WriteImage(ctx, proto.WriteImageParams{Device: device, Source: abs, Size: fi.Size(), Authorization: auth.Token}, progress)
+	return c.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size(), Authorization: auth.Token}, image, progress)
 }
 
 func (d *darwinDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {

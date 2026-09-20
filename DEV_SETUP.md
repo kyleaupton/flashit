@@ -64,8 +64,11 @@ security authorizationdb read dev.kyleupton.flashit.write
 ## Clean slate
 
 Unregistering leaves the socket and the authorization right behind; they
-are ours to remove. The Background Items record stays (only
-`sfltool resetbtm` clears those, for every app, so leave it).
+are ours to remove. Removing the right is safe because the daemon rewrites
+it, and verifies what authd stored, every time it starts; a right created
+by someone else in the meantime is refused, never trusted. The Background
+Items record stays (only `sfltool resetbtm` clears those, for every app, so
+leave it).
 
 ```bash
 sudo launchctl bootout system/dev.kyleupton.flashit.helper

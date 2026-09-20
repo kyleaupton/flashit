@@ -23,12 +23,22 @@ func connect(t *testing.T, disk *helpertest.FakeDisk) (*Client, <-chan error) {
 	srv := helper.New(disk, helpertest.FakeAuth{}, helper.Options{
 		Version: "test", WriteBufferSize: 1024, ProgressInterval: time.Nanosecond,
 	})
-	cc, sc := net.Pipe()
+	cc, sc := helpertest.SocketPair(t)
 	done := make(chan error, 1)
 	go func() { done <- srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
 	t.Cleanup(func() { c.Close() })
 	return c, done
+}
+
+func openSource(t *testing.T, size int) *os.File {
+	t.Helper()
+	f, err := os.Open(sourceFile(t, size))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
 }
 
 func ctxTimeout(t *testing.T) context.Context {
@@ -99,10 +109,15 @@ func TestClientWriteImage(t *testing.T) {
 	}
 
 	const size = 8192 + 100
-	src := sourceFile(t, size)
+	path := sourceFile(t, size)
+	src, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
 	var calls int
 	var last uint64
-	err := c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}, func(written, total uint64) {
+	err = c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, func(written, total uint64) {
 		calls++
 		if written < last || total != size {
 			t.Errorf("bad progress %d/%d after %d", written, total, last)
@@ -115,7 +130,7 @@ func TestClientWriteImage(t *testing.T) {
 	if calls == 0 || last != size {
 		t.Fatalf("progress calls=%d last=%d", calls, last)
 	}
-	want, _ := os.ReadFile(src)
+	want, _ := os.ReadFile(path)
 	if got := disk.Raw.Bytes(); string(got) != string(want) {
 		t.Fatalf("device holds %d bytes, want %d", len(got), len(want))
 	}
@@ -131,19 +146,25 @@ func TestClientWriteImageRefused(t *testing.T) {
 	if _, err := c.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	src := sourceFile(t, 4096)
+	src := openSource(t, 4096)
 
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: "/dev/../etc/shadow", Source: src, Size: 4096}, nil), proto.CodeInvalidDevice)
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Internal, Source: src, Size: 4096}, nil), proto.CodeNotRemovable)
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.System, Source: src, Size: 4096}, nil), proto.CodeSystemDisk)
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: 4095}, nil), proto.CodeSizeMismatch)
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: filepath.Join(t.TempDir(), "no.iso"), Size: 4096}, nil), proto.CodeInvalidSource)
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: helpertest.RemovableSize + 1}, nil), proto.CodeSizeMismatch)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: "/dev/../etc/shadow", Size: 4096}, src, nil), proto.CodeInvalidDevice)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Internal, Size: 4096}, src, nil), proto.CodeNotRemovable)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.System, Size: 4096}, src, nil), proto.CodeSystemDisk)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: 4095}, src, nil), proto.CodeSizeMismatch)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: 4096}, pr, nil), proto.CodeInvalidSource)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: helpertest.RemovableSize + 1}, src, nil), proto.CodeSizeMismatch)
 	if disk.Raw != nil && len(disk.Raw.Bytes()) != 0 {
 		t.Fatal("refused writes reached the device")
 	}
 	// Still connected and usable.
-	if err := c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: 4096}, nil); err != nil {
+	if err := c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: 4096}, src, nil); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -191,11 +212,11 @@ func TestClientContextCancelStopsWrite(t *testing.T) {
 	}
 
 	const size = 16384
-	src := sourceFile(t, size)
+	src := openSource(t, size)
 	ctx, cancel := context.WithCancel(ctxTimeout(t))
 	result := make(chan error, 1)
 	go func() {
-		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}, nil)
+		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, nil)
 	}()
 
 	<-disk.Raw.Started
@@ -237,10 +258,10 @@ func TestClientExplicitCancel(t *testing.T) {
 	}
 
 	const size = 16384
-	src := sourceFile(t, size)
+	src := openSource(t, size)
 	result := make(chan error, 1)
 	go func() {
-		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}, nil)
+		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, nil)
 	}()
 	<-disk.Raw.Started
 	if err := c.Cancel(ctx); err != nil {
@@ -264,10 +285,10 @@ func TestClientBusy(t *testing.T) {
 	}
 
 	const size = 4096
-	src := sourceFile(t, size)
+	src := openSource(t, size)
 	result := make(chan error, 1)
 	go func() {
-		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}, nil)
+		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, nil)
 	}()
 	<-disk.Raw.Started
 	wantCode(t, c.Eject(ctx, helpertest.Removable), proto.CodeBusy)
@@ -281,7 +302,7 @@ func TestClientHelperGoesAway(t *testing.T) {
 	disk := helpertest.NewFakeDisk()
 	disk.Raw = &helpertest.FakeRaw{Started: make(chan struct{}), Block: make(chan struct{})}
 	srv := helper.New(disk, helpertest.FakeAuth{}, helper.Options{WriteBufferSize: 1024})
-	cc, sc := net.Pipe()
+	cc, sc := helpertest.SocketPair(t)
 	serveCtx, stopServer := context.WithCancel(context.Background())
 	go func() { _ = srv.ServeConn(serveCtx, sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
@@ -292,10 +313,10 @@ func TestClientHelperGoesAway(t *testing.T) {
 	}
 
 	const size = 4096
-	src := sourceFile(t, size)
+	src := openSource(t, size)
 	result := make(chan error, 1)
 	go func() {
-		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}, nil)
+		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, nil)
 	}()
 	<-disk.Raw.Started
 	stopServer()
@@ -358,7 +379,7 @@ func TestClientAuthorizationPassesThrough(t *testing.T) {
 	srv := helper.New(disk, helpertest.FakeAuth{}, helper.Options{
 		Version: "test", WriteBufferSize: 1024, ProgressInterval: time.Nanosecond, Authorizer: az,
 	})
-	cc, sc := net.Pipe()
+	cc, sc := helpertest.SocketPair(t)
 	go func() { _ = srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
 	t.Cleanup(func() { c.Close() })
@@ -366,16 +387,16 @@ func TestClientAuthorizationPassesThrough(t *testing.T) {
 	if _, err := c.Ping(ctx); err != nil {
 		t.Fatal(err)
 	}
-	src := sourceFile(t, 4096)
+	src := openSource(t, 4096)
 
-	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: 4096}, nil), proto.CodeUnauthorized)
+	wantCode(t, c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: 4096}, src, nil), proto.CodeUnauthorized)
 	_, err := c.FormatDisk(ctx, proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X", Authorization: "bm9wZQ=="})
 	wantCode(t, err, proto.CodeUnauthorized)
 	if disk.Raw != nil || len(disk.Formats) != 0 {
 		t.Fatal("refused ops touched the disk")
 	}
 
-	if err := c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: 4096, Authorization: "c2VjcmV0"}, nil); err != nil {
+	if err := c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: 4096, Authorization: "c2VjcmV0"}, src, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.FormatDisk(ctx, proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X", Authorization: "c2VjcmV0"}); err != nil {

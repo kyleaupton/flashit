@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -102,15 +101,16 @@ type linuxDiskOps struct {
 }
 
 func (d *linuxDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
-	abs, err := filepath.Abs(isoPath)
+	image, err := os.Open(isoPath)
 	if err != nil {
 		return err
 	}
-	fi, err := os.Stat(abs)
+	defer image.Close()
+	fi, err := image.Stat()
 	if err != nil {
 		return err
 	}
-	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Source: abs, Size: fi.Size()}, progress)
+	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size()}, image, progress)
 }
 
 func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {

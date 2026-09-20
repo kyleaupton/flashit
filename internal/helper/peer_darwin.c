@@ -74,8 +74,52 @@ int flashit_peer_check(int fd, const char *requirement, int *uid, int *pid, char
 	return st;
 }
 
-int flashit_authz_right_exists(const char *right) {
-	return AuthorizationRightGet(right, NULL);
+static void rule_str(CFDictionaryRef rule, const char *key, char *buf, size_t n) {
+	buf[0] = 0;
+	CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+	CFTypeRef v = CFDictionaryGetValue(rule, k);
+	CFRelease(k);
+	if (v && CFGetTypeID(v) == CFStringGetTypeID()) CFStringGetCString(v, buf, n, kCFStringEncodingUTF8);
+}
+
+static int rule_bool(CFDictionaryRef rule, const char *key) {
+	CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+	CFTypeRef v = CFDictionaryGetValue(rule, k);
+	CFRelease(k);
+	if (!v) return -1;
+	if (CFGetTypeID(v) == CFBooleanGetTypeID()) return CFBooleanGetValue(v) ? 1 : 0;
+	if (CFGetTypeID(v) == CFNumberGetTypeID()) {
+		int n = 0;
+		if (CFNumberGetValue(v, kCFNumberIntType, &n)) return n ? 1 : 0;
+	}
+	return -1;
+}
+
+static long rule_num(CFDictionaryRef rule, const char *key) {
+	CFStringRef k = CFStringCreateWithCString(NULL, key, kCFStringEncodingUTF8);
+	CFTypeRef v = CFDictionaryGetValue(rule, k);
+	CFRelease(k);
+	long n = -1;
+	if (v && CFGetTypeID(v) == CFNumberGetTypeID() && !CFNumberGetValue(v, kCFNumberLongType, &n)) n = -1;
+	return n;
+}
+
+int flashit_authz_right_read(const char *right, flashit_authz_rule *out) {
+	memset(out, 0, sizeof *out);
+	out->authenticate_user = out->allow_root = out->shared = -1;
+	out->timeout = -1;
+	CFDictionaryRef rule = NULL;
+	OSStatus st = AuthorizationRightGet(right, &rule);
+	if (st) return st;
+	if (!rule) return errAuthorizationInternal;
+	rule_str(rule, "class", out->class_, sizeof out->class_);
+	rule_str(rule, "group", out->group, sizeof out->group);
+	out->authenticate_user = rule_bool(rule, "authenticate-user");
+	out->allow_root = rule_bool(rule, "allow-root");
+	out->shared = rule_bool(rule, "shared");
+	out->timeout = rule_num(rule, "timeout");
+	CFRelease(rule);
+	return 0;
 }
 
 static void dict_set_bool(CFMutableDictionaryRef d, const char *key, Boolean v) {

@@ -68,4 +68,8 @@ type Authorizer interface {
 var (
 	ErrUnauthorized = errors.New("helper: caller is not authorized")
 	ErrIdle         = errors.New("helper: idle timeout")
+	// ErrConfig marks a failure that a restart will not fix: the build or
+	// the host is wrong. The daemon exits cleanly on it so launchd does not
+	// spin it.
+	ErrConfig = errors.New("helper: configuration error")
 )

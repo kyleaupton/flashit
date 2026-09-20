@@ -9,7 +9,7 @@ import (
 
 // ProtocolVersion is sent by the client in ping and checked by the helper.
 // Bump it whenever a request or response shape changes incompatibly.
-const ProtocolVersion = 2
+const ProtocolVersion = 3
 
 type Op string
 
@@ -77,16 +77,19 @@ type PingResult struct {
 	EUID     int    `json:"euid"`
 }
 
-// WriteImageParams and FormatDiskParams carry Authorization on macOS: the
-// base64 external form of an AuthorizationRef the helper redeems for the
-// write right. Linux ignores it.
+// WriteImageParams names the target; the image itself travels as an open
+// file descriptor passed with the request line over the unix socket
+// (SCM_RIGHTS), so the helper reads exactly the file the app opened and
+// never opens a path as root. Size is what the app measured and the helper
+// checks. Authorization, on macOS, is the base64 external form of an
+// AuthorizationRef the helper redeems for the write right; Linux ignores it.
 type WriteImageParams struct {
 	Device        string `json:"device"`
-	Source        string `json:"source"`
 	Size          int64  `json:"size"`
 	Authorization string `json:"authorization,omitempty"`
 }
 
+// FormatDiskParams carries Authorization as WriteImageParams does.
 type FormatDiskParams struct {
 	Device        string `json:"device"`
 	Filesystem    string `json:"filesystem"`

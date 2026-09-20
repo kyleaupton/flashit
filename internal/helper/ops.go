@@ -12,14 +12,14 @@ import (
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
-func (sess *session) run(ctx context.Context, req proto.Request) (any, error) {
+func (sess *session) run(ctx context.Context, req proto.Request, image *os.File) (any, error) {
 	switch req.Op {
 	case proto.OpWriteImage:
 		var p proto.WriteImageParams
 		if err := decodeParams(req, &p); err != nil {
 			return nil, err
 		}
-		return nil, sess.writeImage(ctx, req.ID, p)
+		return nil, sess.writeImage(ctx, req.ID, p, image)
 	case proto.OpFormatDisk:
 		var p proto.FormatDiskParams
 		if err := decodeParams(req, &p); err != nil {
@@ -96,27 +96,22 @@ func (sess *session) unmountAll(info DeviceInfo) error {
 	return nil
 }
 
-func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteImageParams) error {
+// writeImage streams the file the app passed with the request onto the
+// device. The helper never opens the image by path: whatever the app could
+// open is what gets written, and nothing else.
+func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteImageParams, src *os.File) error {
+	if src == nil {
+		return proto.NewError(proto.CodeInvalidRequest, "write_image must carry the image as a passed file descriptor")
+	}
 	info, err := sess.resolveTarget(proto.OpWriteImage, p.Device)
 	if err != nil {
 		return err
 	}
-
-	srcPath, err := validate.SourcePath(p.Source)
-	if err != nil {
-		return err
-	}
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return proto.Errorf(proto.CodeInvalidSource, "open %s: %v", srcPath, err)
-	}
-	defer src.Close()
-	// fstat on the open fd: the file checked is the file that will be read.
 	fi, err := src.Stat()
 	if err != nil {
-		return proto.Errorf(proto.CodeInvalidSource, "stat %s: %v", srcPath, err)
+		return proto.Errorf(proto.CodeInvalidSource, "stat image: %v", err)
 	}
-	if err := validate.Source(fi, sess.peer.UID, p.Size); err != nil {
+	if err := validate.Source(fi, p.Size); err != nil {
 		return err
 	}
 	if err := validate.Capacity(p.Size, info); err != nil {
@@ -137,7 +132,7 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 		return proto.Errorf(proto.CodeInternal, "open %s: %v", info.Path, err)
 	}
 
-	sess.s.opts.Logger.Info("writing image", "source", srcPath, "device", info.Path, "bytes", p.Size)
+	sess.s.opts.Logger.Info("writing image", "device", info.Path, "bytes", p.Size)
 	if err := sess.stream(ctx, id, src, dst, p.Size); err != nil {
 		dst.Close()
 		return err

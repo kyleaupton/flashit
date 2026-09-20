@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -196,24 +195,27 @@ func (sess *session) serve(parent context.Context) error {
 	})
 	defer sess.idle.Stop()
 
-	scanner := bufio.NewScanner(sess.conn)
-	scanner.Buffer(make([]byte, 0, 4096), maxLineBytes)
-
+	rd := newLineReader(sess.conn)
 	var readErr error
-	for scanner.Scan() {
+	for {
+		msg, err := rd.next()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
+		}
 		sess.idle.Stop()
 		var req proto.Request
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		if err := json.Unmarshal(msg.line, &req); err != nil {
+			closeFDs(msg.fds)
 			sess.write(proto.ErrorResponse("", proto.NewError(proto.CodeInvalidRequest, "malformed request")))
 			break
 		}
-		if closeConn := sess.handle(ctx, req); closeConn {
+		if closeConn := sess.handle(ctx, req, takeFile(msg.fds)); closeConn {
 			break
 		}
 		sess.armIdle()
-	}
-	if scanner.Err() != nil {
-		readErr = scanner.Err()
 	}
 
 	sess.conn.Close()
@@ -243,9 +245,23 @@ func (sess *session) armIdle() {
 
 // handle dispatches one request and reports whether the connection must be
 // closed afterwards. ping and cancel are answered inline; everything else is
-// an op and runs in its own goroutine so cancel can still be read.
-func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn bool) {
+// an op and runs in its own goroutine so cancel can still be read. src is
+// the file passed with the request, if any; only write_image keeps it.
+func (sess *session) handle(ctx context.Context, req proto.Request, src *os.File) (closeConn bool) {
 	log := sess.s.opts.Logger
+
+	if src != nil && req.Op != proto.OpWriteImage {
+		log.Warn("descriptor passed with an op that takes none", "op", req.Op)
+		src.Close()
+		src = nil
+	}
+	if src != nil {
+		defer func() {
+			if src != nil {
+				src.Close()
+			}
+		}()
+	}
 
 	if req.Op == proto.OpPing {
 		var p proto.PingParams
@@ -305,11 +321,16 @@ func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn b
 	sess.mu.Unlock()
 
 	sess.ops.Add(1)
+	image := src
+	src = nil
 	go func() {
 		defer sess.ops.Done()
 		defer cancel()
+		if image != nil {
+			defer image.Close()
+		}
 
-		data, err := sess.run(opCtx, req)
+		data, err := sess.run(opCtx, req, image)
 		var resp proto.Response
 		if err != nil {
 			pe := toProtoError(opCtx, err)

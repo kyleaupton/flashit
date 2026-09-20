@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,27 +34,46 @@ func testOptions() helper.Options {
 	return helper.Options{Version: "test", WriteBufferSize: 1024, ProgressInterval: time.Nanosecond}
 }
 
-// serve starts ServeConn on one end of a pipe and returns a client on the other.
+// serve starts ServeConn on one end of a unix socket pair and returns a
+// client on the other, so requests can carry file descriptors.
 func serve(t *testing.T, disk helper.Disk, opts helper.Options) *client {
 	t.Helper()
 	srv := helper.New(disk, helpertest.FakeAuth{}, opts)
-	cc, sc := net.Pipe()
+	cc, sc := helpertest.SocketPair(t)
 	done := make(chan error, 1)
 	go func() { done <- srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid()}) }()
 	_ = cc.SetDeadline(time.Now().Add(testTimeout))
-	t.Cleanup(func() { cc.Close() })
 	return &client{t: t, conn: cc, r: bufio.NewReader(cc), done: done}
 }
 
 func (c *client) send(id string, op proto.Op, params any) {
+	c.t.Helper()
+	c.sendFDs(id, op, params, nil)
+}
+
+// sendFile sends a request with the file's descriptor attached, as the app
+// does for write_image.
+func (c *client) sendFile(id string, op proto.Op, params any, f *os.File) {
+	c.t.Helper()
+	c.sendFDs(id, op, params, []int{int(f.Fd())})
+}
+
+func (c *client) sendFDs(id string, op proto.Op, params any, fds []int) {
 	c.t.Helper()
 	req, err := proto.NewRequest(id, op, params)
 	if err != nil {
 		c.t.Fatal(err)
 	}
 	b, _ := json.Marshal(req)
-	if _, err := c.conn.Write(append(b, '\n')); err != nil {
-		c.t.Fatalf("send %s: %v", op, err)
+	line := append(b, '\n')
+	if len(fds) == 0 {
+		if _, err := c.conn.Write(line); err != nil {
+			c.t.Fatalf("send %s: %v", op, err)
+		}
+		return
+	}
+	if _, _, err := c.conn.(*helpertest.SyncConn).WriteMsgUnix(line, syscall.UnixRights(fds...), nil); err != nil {
+		c.t.Fatalf("send %s with fds: %v", op, err)
 	}
 }
 
@@ -82,6 +102,17 @@ func (c *client) recv() proto.Response {
 func (c *client) call(id string, op proto.Op, params any) ([]proto.Response, proto.Response) {
 	c.t.Helper()
 	c.send(id, op, params)
+	return c.collect(id)
+}
+
+func (c *client) callFile(id string, op proto.Op, params any, f *os.File) ([]proto.Response, proto.Response) {
+	c.t.Helper()
+	c.sendFile(id, op, params, f)
+	return c.collect(id)
+}
+
+func (c *client) collect(id string) ([]proto.Response, proto.Response) {
+	c.t.Helper()
 	var progress []proto.Response
 	for {
 		resp := c.recv()
@@ -157,6 +188,22 @@ func sourceFile(t *testing.T, size int) string {
 	return path
 }
 
+func openFile(t *testing.T, path string) *os.File {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { f.Close() })
+	return f
+}
+
+// openSource is an open image of size bytes.
+func openSource(t *testing.T, size int) *os.File {
+	t.Helper()
+	return openFile(t, sourceFile(t, size))
+}
+
 func TestPing(t *testing.T) {
 	c := serve(t, helpertest.NewFakeDisk(), testOptions())
 	r := c.ping()
@@ -211,13 +258,13 @@ func TestWriteImage(t *testing.T) {
 	c.ping()
 
 	const size = 10*1024 + 17
-	src := sourceFile(t, size)
-	progress, resp := c.call("1", proto.OpWriteImage, proto.WriteImageParams{
-		Device: helpertest.RemovableLink, Source: src, Size: size,
-	})
+	path := sourceFile(t, size)
+	progress, resp := c.callFile("1", proto.OpWriteImage, proto.WriteImageParams{
+		Device: helpertest.RemovableLink, Size: size,
+	}, openFile(t, path))
 	wantResult(t, resp)
 
-	want, _ := os.ReadFile(src)
+	want, _ := os.ReadFile(path)
 	if got := disk.Raw.Bytes(); string(got) != string(want) {
 		t.Fatalf("device holds %d bytes, want %d", len(got), len(want))
 	}
@@ -254,46 +301,57 @@ func TestWriteImage(t *testing.T) {
 
 func TestWriteImageRefusals(t *testing.T) {
 	const size = 4096
-	src := sourceFile(t, size)
 	dir := t.TempDir()
-	ok := proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size}
+	ok := proto.WriteImageParams{Device: helpertest.Removable, Size: size}
+	regular := func(t *testing.T) *os.File { return openSource(t, size) }
+	pipe := func(t *testing.T) *os.File {
+		r, w, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { r.Close(); w.Close() })
+		return r
+	}
+	directory := func(t *testing.T) *os.File { return openFile(t, dir) }
+	none := func(*testing.T) *os.File { return nil }
 
 	cases := []struct {
 		name   string
 		params proto.WriteImageParams
+		image  func(*testing.T) *os.File
 		setup  func(d *helpertest.FakeDisk)
 		want   proto.ErrorCode
 	}{
-		{"path traversal", proto.WriteImageParams{Device: "/dev/../etc/shadow", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"outside /dev", proto.WriteImageParams{Device: "/etc/shadow", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"relative", proto.WriteImageParams{Device: "sdb", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"missing device", proto.WriteImageParams{Device: "/dev/sdz", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"not a block device", proto.WriteImageParams{Device: "/dev/null", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"partition", proto.WriteImageParams{Device: helpertest.Removable + "1", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"partition of system disk", proto.WriteImageParams{Device: helpertest.System + "p2", Source: src, Size: size}, nil, proto.CodeInvalidDevice},
-		{"internal disk", proto.WriteImageParams{Device: helpertest.Internal, Source: src, Size: size}, nil, proto.CodeNotRemovable},
-		{"system disk", proto.WriteImageParams{Device: helpertest.System, Source: src, Size: size}, nil, proto.CodeSystemDisk},
-		{"system disk unknown", ok, func(d *helpertest.FakeDisk) { d.System = nil }, proto.CodeSystemDisk},
-		{"system disk lookup fails", ok, func(d *helpertest.FakeDisk) { d.SystemErr = errors.New("no /proc") }, proto.CodeInternal},
-		{"target became system disk", ok, func(d *helpertest.FakeDisk) { d.System = []string{helpertest.Removable} }, proto.CodeSystemDisk},
-		{"missing source", proto.WriteImageParams{Device: helpertest.Removable, Source: filepath.Join(dir, "nope.iso"), Size: size}, nil, proto.CodeInvalidSource},
-		{"relative source", proto.WriteImageParams{Device: helpertest.Removable, Source: "x.iso", Size: size}, nil, proto.CodeInvalidSource},
-		{"directory source", proto.WriteImageParams{Device: helpertest.Removable, Source: dir, Size: size}, nil, proto.CodeInvalidSource},
-		{"zero size", proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: 0}, nil, proto.CodeInvalidSource},
-		{"size too small", proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size - 1}, nil, proto.CodeSizeMismatch},
-		{"size too large", proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size + 1}, nil, proto.CodeSizeMismatch},
-		{"device too small", ok, func(d *helpertest.FakeDisk) {
+		{"path traversal", proto.WriteImageParams{Device: "/dev/../etc/shadow", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"outside /dev", proto.WriteImageParams{Device: "/etc/shadow", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"relative", proto.WriteImageParams{Device: "sdb", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"missing device", proto.WriteImageParams{Device: "/dev/sdz", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"not a block device", proto.WriteImageParams{Device: "/dev/null", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"partition", proto.WriteImageParams{Device: helpertest.Removable + "1", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"partition of system disk", proto.WriteImageParams{Device: helpertest.System + "p2", Size: size}, regular, nil, proto.CodeInvalidDevice},
+		{"internal disk", proto.WriteImageParams{Device: helpertest.Internal, Size: size}, regular, nil, proto.CodeNotRemovable},
+		{"system disk", proto.WriteImageParams{Device: helpertest.System, Size: size}, regular, nil, proto.CodeSystemDisk},
+		{"system disk unknown", ok, regular, func(d *helpertest.FakeDisk) { d.System = nil }, proto.CodeSystemDisk},
+		{"system disk lookup fails", ok, regular, func(d *helpertest.FakeDisk) { d.SystemErr = errors.New("no /proc") }, proto.CodeInternal},
+		{"target became system disk", ok, regular, func(d *helpertest.FakeDisk) { d.System = []string{helpertest.Removable} }, proto.CodeSystemDisk},
+		{"no image passed", ok, none, nil, proto.CodeInvalidRequest},
+		{"pipe as image", ok, pipe, nil, proto.CodeInvalidSource},
+		{"directory as image", ok, directory, nil, proto.CodeInvalidSource},
+		{"zero size", proto.WriteImageParams{Device: helpertest.Removable, Size: 0}, regular, nil, proto.CodeInvalidSource},
+		{"size too small", proto.WriteImageParams{Device: helpertest.Removable, Size: size - 1}, regular, nil, proto.CodeSizeMismatch},
+		{"size too large", proto.WriteImageParams{Device: helpertest.Removable, Size: size + 1}, regular, nil, proto.CodeSizeMismatch},
+		{"device too small", ok, regular, func(d *helpertest.FakeDisk) {
 			info := d.Devices[helpertest.Removable]
 			info.Size = size - 1
 			d.Devices[helpertest.Removable] = info
 		}, proto.CodeInsufficientCapacity},
-		{"partition busy", ok, func(d *helpertest.FakeDisk) {
+		{"partition busy", ok, regular, func(d *helpertest.FakeDisk) {
 			d.UnmountErr = map[string]error{helpertest.Removable + "1": syscall.EBUSY}
 		}, proto.CodeDeviceBusy},
-		{"partitions unknown", ok, func(d *helpertest.FakeDisk) { d.PartitionsErr = errors.New("sysfs") }, proto.CodeInternal},
-		{"device claimed", ok, func(d *helpertest.FakeDisk) { d.OpenRawErr = syscall.EBUSY }, proto.CodeDeviceBusy},
-		{"open fails", ok, func(d *helpertest.FakeDisk) { d.OpenRawErr = errors.New("EIO") }, proto.CodeInternal},
-		{"write fails", ok, func(d *helpertest.FakeDisk) { d.Raw = &helpertest.FakeRaw{WriteErr: errors.New("EIO")} }, proto.CodeInternal},
+		{"partitions unknown", ok, regular, func(d *helpertest.FakeDisk) { d.PartitionsErr = errors.New("sysfs") }, proto.CodeInternal},
+		{"device claimed", ok, regular, func(d *helpertest.FakeDisk) { d.OpenRawErr = syscall.EBUSY }, proto.CodeDeviceBusy},
+		{"open fails", ok, regular, func(d *helpertest.FakeDisk) { d.OpenRawErr = errors.New("EIO") }, proto.CodeInternal},
+		{"write fails", ok, regular, func(d *helpertest.FakeDisk) { d.Raw = &helpertest.FakeRaw{WriteErr: errors.New("EIO")} }, proto.CodeInternal},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -303,7 +361,12 @@ func TestWriteImageRefusals(t *testing.T) {
 			}
 			c := serve(t, disk, testOptions())
 			c.ping()
-			_, resp := c.call("1", proto.OpWriteImage, tc.params)
+			var resp proto.Response
+			if f := tc.image(t); f != nil {
+				_, resp = c.callFile("1", proto.OpWriteImage, tc.params, f)
+			} else {
+				_, resp = c.call("1", proto.OpWriteImage, tc.params)
+			}
 			wantError(t, resp, tc.want)
 			if disk.Raw != nil && tc.want != proto.CodeInternal && len(disk.Raw.Bytes()) > 0 {
 				t.Fatalf("refused op wrote %d bytes", len(disk.Raw.Bytes()))
@@ -314,17 +377,59 @@ func TestWriteImageRefusals(t *testing.T) {
 	}
 }
 
+// Only the first descriptor is the image; any others are closed at once,
+// which shows as EOF on the pipe they were the last writer of.
+func TestWriteImageClosesExtraDescriptors(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	c := serve(t, disk, testOptions())
+	c.ping()
+
+	const size = 4096
+	image := openSource(t, size)
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	c.sendFDs("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, []int{int(image.Fd()), int(pw.Fd())})
+	pw.Close()
+	_, resp := c.collect("1")
+	wantResult(t, resp)
+	if len(disk.Raw.Bytes()) != size {
+		t.Fatalf("wrote %d bytes", len(disk.Raw.Bytes()))
+	}
+	_ = pr.SetReadDeadline(time.Now().Add(testTimeout))
+	if _, err := pr.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("extra descriptor still open in the helper: %v", err)
+	}
+
+	// A descriptor sent with an op that takes none is closed too.
+	pr2, pw2, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr2.Close()
+	c.sendFDs("2", proto.OpEject, proto.EjectParams{Device: helpertest.Removable}, []int{int(pw2.Fd())})
+	pw2.Close()
+	_, resp = c.collect("2")
+	wantResult(t, resp)
+	_ = pr2.SetReadDeadline(time.Now().Add(testTimeout))
+	if _, err := pr2.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("stray descriptor still open in the helper: %v", err)
+	}
+}
+
 func TestWriteImageSourceShrinks(t *testing.T) {
 	disk := helpertest.NewFakeDisk()
 	c := serve(t, disk, testOptions())
 	c.ping()
 
 	const size = 8192
-	src := sourceFile(t, size)
+	path := sourceFile(t, size)
 	disk.Raw = &helpertest.FakeRaw{Started: make(chan struct{}), Block: make(chan struct{})}
-	c.send("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+	c.sendFile("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, openFile(t, path))
 	<-disk.Raw.Started
-	if err := os.Truncate(src, 2048); err != nil {
+	if err := os.Truncate(path, 2048); err != nil {
 		t.Fatal(err)
 	}
 	close(disk.Raw.Block)
@@ -345,8 +450,8 @@ func TestCancelMidWrite(t *testing.T) {
 	c.ping()
 
 	const size = 8192
-	src := sourceFile(t, size)
-	c.send("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+	src := openSource(t, size)
+	c.sendFile("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src)
 	<-disk.Raw.Started
 
 	c.send("2", proto.OpCancel, nil)
@@ -393,8 +498,8 @@ func TestSecondOpWhileBusy(t *testing.T) {
 	c.ping()
 
 	const size = 4096
-	src := sourceFile(t, size)
-	c.send("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+	src := openSource(t, size)
+	c.sendFile("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src)
 	<-disk.Raw.Started
 
 	c.send("2", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
@@ -587,8 +692,8 @@ func TestIdleTimerPausesDuringOp(t *testing.T) {
 	c.ping()
 
 	const size = 4096
-	src := sourceFile(t, size)
-	c.send("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+	src := openSource(t, size)
+	c.sendFile("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src)
 	<-disk.Raw.Started
 	time.Sleep(3 * opts.IdleTimeout)
 	close(disk.Raw.Block)
@@ -719,38 +824,11 @@ func TestServeStopsOnContext(t *testing.T) {
 	c.expectClosed()
 }
 
-// The helper runs as root; a source the caller does not own must be refused
-// before anything about it (including its size) is revealed.
-func TestWriteImageRefusesSourceNotOwnedByCaller(t *testing.T) {
-	disk := helpertest.NewFakeDisk()
-	srv := helper.New(disk, helpertest.FakeAuth{}, testOptions())
-	cc, sc := net.Pipe()
-	go func() { _ = srv.ServeConn(context.Background(), sc, helper.Peer{UID: os.Getuid() + 1}) }()
-	_ = cc.SetDeadline(time.Now().Add(testTimeout))
-	t.Cleanup(func() { cc.Close() })
-	c := &client{t: t, conn: cc, r: bufio.NewReader(cc)}
-	c.ping()
-
-	const size = 4096
-	src := sourceFile(t, size)
-	for _, claimed := range []int64{size, size - 1} {
-		_, resp := c.call("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: claimed})
-		wantError(t, resp, proto.CodeInvalidSource)
-		if strings.Contains(resp.Message, strconv.Itoa(size)) {
-			t.Fatalf("message leaks the size: %q", resp.Message)
-		}
-	}
-	if disk.Raw != nil {
-		t.Fatal("device was opened for a refused source")
-	}
-}
-
 func TestWriteImageSizeMismatchHidesSize(t *testing.T) {
 	c := serve(t, helpertest.NewFakeDisk(), testOptions())
 	c.ping()
 	const size = 4096
-	src := sourceFile(t, size)
-	_, resp := c.call("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size + 1})
+	_, resp := c.callFile("1", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size + 1}, openSource(t, size))
 	wantError(t, resp, proto.CodeSizeMismatch)
 	if strings.Contains(resp.Message, strconv.Itoa(size)) {
 		t.Fatalf("message leaks the size: %q", resp.Message)
@@ -764,7 +842,7 @@ func TestIdleTimerNotRearmedByPreviousOp(t *testing.T) {
 	opts := testOptions()
 	opts.IdleTimeout = 30 * time.Millisecond
 	const size = 4096
-	src := sourceFile(t, size)
+	path := sourceFile(t, size)
 
 	for i := 0; i < 20; i++ {
 		disk := helpertest.NewFakeDisk()
@@ -775,7 +853,9 @@ func TestIdleTimerNotRearmedByPreviousOp(t *testing.T) {
 		wantResult(t, resp)
 
 		disk.Raw = &helpertest.FakeRaw{Started: make(chan struct{}), Block: make(chan struct{})}
-		c.send("b", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size})
+		// The helper reads through the passed descriptor's own offset, so
+		// each iteration needs a fresh open.
+		c.sendFile("b", proto.OpWriteImage, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, openFile(t, path))
 		<-disk.Raw.Started
 		time.Sleep(4 * opts.IdleTimeout)
 		close(disk.Raw.Block)
@@ -796,9 +876,8 @@ func TestIdleTimerNotRearmedByPreviousOp(t *testing.T) {
 
 func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 	const size = 4096
-	src := sourceFile(t, size)
 	write := func(token string) proto.WriteImageParams {
-		return proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size, Authorization: token}
+		return proto.WriteImageParams{Device: helpertest.Removable, Size: size, Authorization: token}
 	}
 	format := func(token string) proto.FormatDiskParams {
 		return proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X", Authorization: token}
@@ -811,7 +890,7 @@ func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 		opts.Authorizer = az
 		c := serve(t, disk, opts)
 		c.ping()
-		_, resp := c.call("1", proto.OpWriteImage, write(""))
+		_, resp := c.callFile("1", proto.OpWriteImage, write(""), openSource(t, size))
 		wantError(t, resp, proto.CodeUnauthorized)
 		_, resp = c.call("2", proto.OpFormatDisk, format(""))
 		wantError(t, resp, proto.CodeUnauthorized)
@@ -829,7 +908,7 @@ func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 		opts.Authorizer = &helpertest.FakeAuthorizer{Token: "good"}
 		c := serve(t, disk, opts)
 		c.ping()
-		_, resp := c.call("1", proto.OpWriteImage, write("forged"))
+		_, resp := c.callFile("1", proto.OpWriteImage, write("forged"), openSource(t, size))
 		wantError(t, resp, proto.CodeUnauthorized)
 		if strings.Contains(resp.Message, "forged") || strings.Contains(resp.Message, "good") {
 			t.Fatalf("message leaks the token: %q", resp.Message)
@@ -840,9 +919,9 @@ func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 			t.Fatal("refused op touched the disk")
 		}
 		// The session is still usable, and the token is required per op.
-		_, resp = c.call("3", proto.OpWriteImage, write("good"))
+		_, resp = c.callFile("3", proto.OpWriteImage, write("good"), openSource(t, size))
 		wantResult(t, resp)
-		_, resp = c.call("4", proto.OpWriteImage, write("forged"))
+		_, resp = c.callFile("4", proto.OpWriteImage, write("forged"), openSource(t, size))
 		wantError(t, resp, proto.CodeUnauthorized)
 	})
 
@@ -853,11 +932,11 @@ func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 		c := serve(t, helpertest.NewFakeDisk(), opts)
 		c.ping()
 		for _, p := range []proto.WriteImageParams{
-			{Device: helpertest.System, Source: src, Size: size, Authorization: "good"},
-			{Device: helpertest.Internal, Source: src, Size: size, Authorization: "good"},
-			{Device: helpertest.Removable, Source: src, Size: size + 1, Authorization: "good"},
+			{Device: helpertest.System, Size: size, Authorization: "good"},
+			{Device: helpertest.Internal, Size: size, Authorization: "good"},
+			{Device: helpertest.Removable, Size: size + 1, Authorization: "good"},
 		} {
-			_, resp := c.call("1", proto.OpWriteImage, p)
+			_, resp := c.callFile("1", proto.OpWriteImage, p, openSource(t, size))
 			if resp.Type != proto.TypeError || resp.Code == proto.CodeUnauthorized {
 				t.Fatalf("expected a validation error, got %+v", resp)
 			}

@@ -12,8 +12,20 @@ int flashit_requirement_validate(const char *requirement, char *err, size_t errl
 int flashit_peer_check(int fd, const char *requirement, int *uid, int *pid, char *err, size_t errlen);
 
 // Authorization Services. All return OSStatus (0 = success).
-int flashit_authz_right_exists(const char *right);
 int flashit_authz_right_create(const char *right, const char *prompt, int timeout_s, char *err, size_t errlen);
+
+// The rule authd holds for a right, reduced to the keys the helper checks.
+// Booleans are 1/0, or -1 when the key is absent or not a boolean; timeout
+// is -1 when absent or not a number.
+typedef struct {
+	char class_[32];
+	char group[64];
+	int authenticate_user;
+	int allow_root;
+	int shared;
+	long timeout;
+} flashit_authz_rule;
+int flashit_authz_right_read(const char *right, flashit_authz_rule *out);
 // Rebuilds an AuthorizationRef from its 32-byte external form and asks authd
 // for right, raising the sheet in the user's session if needed. The ref is
 // freed before returning.

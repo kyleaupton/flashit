@@ -25,8 +25,8 @@ func TestRequestRoundTrip(t *testing.T) {
 	params := []any{
 		nil,
 		PingParams{Protocol: ProtocolVersion},
-		WriteImageParams{Device: "/dev/sdb", Source: "/tmp/x.iso", Size: 3145728000},
-		WriteImageParams{Device: "/dev/disk4", Source: "/tmp/x.iso", Size: 1, Authorization: "AAAA"},
+		WriteImageParams{Device: "/dev/sdb", Size: 3145728000},
+		WriteImageParams{Device: "/dev/disk4", Size: 1, Authorization: "AAAA"},
 		FormatDiskParams{Device: "/dev/sdb", Filesystem: "fat32", Label: "FLASHIT"},
 		FormatDiskParams{Device: "/dev/disk4", Filesystem: "fat32", Label: "FLASHIT", Authorization: "AAAA"},
 		MountISOParams{Path: "/tmp/x.iso"},
@@ -62,9 +62,9 @@ func TestRequestRoundTrip(t *testing.T) {
 }
 
 func TestRequestFieldNames(t *testing.T) {
-	req, _ := NewRequest("7", OpWriteImage, WriteImageParams{Device: "/dev/sdb", Source: "/tmp/x.iso", Size: 1})
+	req, _ := NewRequest("7", OpWriteImage, WriteImageParams{Device: "/dev/sdb", Size: 1})
 	raw, _ := json.Marshal(req)
-	want := `{"id":"7","op":"write_image","params":{"device":"/dev/sdb","source":"/tmp/x.iso","size":1}}`
+	want := `{"id":"7","op":"write_image","params":{"device":"/dev/sdb","size":1}}`
 	if string(raw) != want {
 		t.Fatalf("got %s\nwant %s", raw, want)
 	}
@@ -164,7 +164,7 @@ func TestErrorFieldNames(t *testing.T) {
 
 func TestDecodeWireExamples(t *testing.T) {
 	lines := []string{
-		`{"id":"7","op":"write_image","params":{"device":"/dev/sdb","source":"/tmp/x.iso","size":3145728000}}`,
+		`{"id":"7","op":"write_image","params":{"device":"/dev/sdb","size":3145728000}}`,
 	}
 	var req Request
 	if err := json.Unmarshal([]byte(lines[0]), &req); err != nil {
