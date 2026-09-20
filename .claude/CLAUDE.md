@@ -2,137 +2,133 @@
 
 This file provides guidance for Claude Code when working on this project.
 
-Always use Context7 MCP when I need library/API documentation, code generation, setup or configuration steps without me having to explicitly ask, except for things that have explicit MCP servers like shadcn-vue.
+Always use Context7 MCP when I need library/API documentation, code generation,
+setup or configuration steps without me having to explicitly ask, except for
+things that have explicit MCP servers like shadcn-vue.
 
 Documentation IDs:
-Wails3 - /websites/v3alpha_wails_io
+Wails3 - /websites/v3_wails_io
 
 ## Project Overview
 
-**FlashIt** is a cross-platform desktop app built with Wails v3 that creates bootable USB OS installers. The primary motivation: making Windows USB installers on macOS requires splitting large `.wim` files (>4GB) for FAT32 compatibility using wimlib.
+FlashIt is a cross-platform desktop app that writes bootable USB installers from
+an ISO. Linux ISOs are hybrid images and get written raw to the device. Windows
+ISOs are not, so the USB is formatted FAT32 and the ISO contents are copied file
+by file, splitting `install.wim` into `.swm` parts when it exceeds the FAT32 4GB
+file size limit. Disk work runs through a per-platform privileged helper.
 
-**Branch:** `go-rewrite` (active development branch)
+Branch model: `main` is the only long-lived branch. Work happens on feature
+branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 
 ## Tech Stack
 
-- **Backend:** Go 1.21+ with Wails v3-alpha
-- **Frontend:** Vue 3 + TypeScript + Vite
-- **Build:** Wails Task framework (`task dev` for development)
-- **CGO:** wimlib integration for Windows media splitting
+- Go 1.25 (`go.mod` module `github.com/kyleaupton/flashit`)
+- Wails v3.0.0-beta.23 (`github.com/wailsapp/wails/v3`, `@wailsio/runtime`)
+- Vue 3 + TypeScript 5.9 + Vite 7, Pinia, Tailwind 4, reka-ui/shadcn-vue
+- Task (`Taskfile.yml`) drives build and dev
 
-## Project Structure
+WIM reading, splitting and LZX decompression are pure Go in `internal/wim`.
+There is no CGO and no wimlib dependency anywhere in the Go code.
+
+## Layout
 
 ```
-/
-├── main.go                    # Wails v3 entry point
-├── internal/
-│   ├── core/                  # Type contracts (Plan, Step, Installer, Event)
-│   ├── service/               # Wails services (JobsService, DrivesService)
-│   ├── jobs/                  # Job execution engine
-│   ├── installers/            # OS-specific installers
-│   │   └── linux/ubuntu/      # Ubuntu installer (working on macOS)
-│   ├── steps/                 # Executable job steps (disk ops)
-│   ├── drives/                # Cross-platform drive detection
-│   ├── priv/                  # Privileged command execution
-│   ├── fs/                    # Low-level file operations
-│   ├── wim/                   # CGO bridge to wimlib
-│   └── eventbus/              # Global event emitter
-├── frontend/
-│   ├── src/                   # Vue components
-│   └── bindings/              # Auto-generated Wails bindings
-├── build/                     # Platform-specific build configs
-├── macos/privilaged/          # macOS privileged helper daemon
-└── docs/                      # Architecture documentation
+main.go, version.go          Wails app entry point, service registration
+internal/core/               Shared contracts: Plan, Runnable, Event, Installer
+internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
+internal/jobs/               Job manager: enqueue, run, cancel
+internal/service/            Wails services: JobsService, DrivesService
+internal/installers/linux/   Linux installer + its steps/
+internal/installers/windows/ Windows installer + its steps/
+internal/drives/             Removable drive enumeration per OS (+ mock provider)
+internal/iso/                Hybrid ISO validation and ISO mounting per OS
+internal/wim/                WIM reader, splitter, lzx/ decompressor
+internal/fs/                 File copy, APFS clone on darwin
+internal/priv/               Privileged service clients (darwin/linux/windows)
+internal/eventbus/           Global emitter wired to app.Event.Emit
+internal/logger/             slog wrapper backed by the Wails logger
+cmd/wimtest/                 CLI for exercising the WIM splitter
+helpers/                     Privileged helper daemons, one per OS (helpers/linux is its own Go module)
+frontend/src/                Vue app; frontend/bindings/ is generated and committed
+build/                       Per-platform Taskfiles and packaging config
+docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
 
-## Key Commands
+## Commands
 
 ```bash
-# Development (hot-reload)
-task dev
-
-# Build for current platform
-task build
-
-# Generate frontend bindings (auto-runs on dev)
-wails3 generate bindings
+task dev                  # hot-reload dev build
+task build                # build for the host OS into bin/
+go test ./...             # tests live in internal/pipeline, internal/iso, internal/drives (linux-only)
+wails3 generate bindings -ts   # regenerate frontend/bindings after changing a service
+cd frontend && npm run type-check && npm run build
 ```
 
-## Architecture Patterns
+`helpers/linux` is a separate module and only builds for Linux:
+`cd helpers/linux && GOOS=linux go build ./...`.
 
-### Installer Interface
-Each OS installer implements `core.Installer`:
-```go
-type Installer interface {
-    ID() string
-    Name() string
-    Targets() []Target
-    ValidateHost(ctx context.Context) bool
-    Plan(ctx context.Context, target Target, sourcePath string, drive drives.Drive) (*Plan, error)
-}
-```
+## Status
 
-### Job Execution Flow
-1. `JobsService.StartJob()` creates a `Plan` with `Steps`
-2. `jobs.Manager.Enqueue()` runs steps sequentially
-3. Steps emit `core.Event` via `eventbus.Emit()`
-4. Wails forwards events to frontend
+Host OS support:
 
-### Privilege Handling
-- **macOS:** Launchd daemon + XPC socket (`macos/privilaged/`)
-- **Linux:** pkexec (stubbed)
-- **Windows:** UAC (stubbed)
+| Host    | Drive listing | ISO mount | Privileged helper |
+| ------- | ------------- | --------- | ----------------- |
+| macOS   | yes (`diskutil`) | yes (`hdiutil`) | launchd + XPC |
+| Linux   | yes (`lsblk`) | no, stub returns an error | helper over a socket |
+| Windows | yes (PowerShell) | yes | named-pipe helper |
 
-## Current Implementation Status
+Installer support, derived from `Plan` guards:
 
-### Working (macOS)
-- Drive detection (`diskutil` parsing)
-- Disk operations (unmount, raw write, eject)
-- Ubuntu ISO → USB flow
-- wimlib CGO bridge (splitting ready, not integrated)
+| Installer  | macOS | Linux | Windows |
+| ---------- | ----- | ----- | ------- |
+| Linux ISO  | yes   | yes   | yes     |
+| Windows ISO| yes   | no    | yes     |
 
-### Stubbed (needs implementation)
-- Linux drive detection (`/sys` + udev)
-- Windows drive detection (WMI)
-- Linux/Windows privilege elevation
-- Windows installer (wimlib integration)
+The Windows installer is unavailable on a Linux host because
+`internal/iso/mount_linux_stub.go` reports `IsSupported() == false`, and
+`windows.Plan` refuses to build a plan without ISO mounting.
 
-## WIM File Handling
+## Job execution flow
 
-Located in `internal/wim/`. Pure Go implementation for reading and splitting Windows `.wim` files for FAT32 compatibility (files >4GB must be split).
+`JobsService.StartJob` looks up the installer, calls `installer.Plan`, which
+validates the source and drive and returns a `core.Plan` wrapping a bound
+`pipeline.Pipeline`. `jobs.Manager.Enqueue` stores the job and runs it on a
+cancellable background context. Steps emit through `core.Executor`, the manager
+forwards to `eventbus.Emit("job:event", ev)`, and Wails delivers it to the
+frontend, where `frontend/src/stores/job.ts` subscribes with `Events.On('job:event', ...)`.
 
-```go
-// Split a WIM file for FAT32 compatibility
-wim.SplitWithProgress(ctx, srcWIM, dstPrefix, opts, progressFn)
-
-// Copy split SWM files to USB
-wim.CopySWMs(ctx, swmDir, usbRoot, progressFn)
-```
-
-## Event Schema
-
-Events emitted to frontend via `job:event`:
 ```go
 type Event struct {
-    JobID   string
-    Type    string   // "state", "step-start", "step-end", "progress", "log", "error"
-    Message string
-    Step    string
-    Percent int
-    Error   string
+	JobID   string  `json:"jobId"`
+	Type    string  `json:"type"`
+	Message string  `json:"message,omitempty"`
+	Step    string  `json:"step,omitempty"`
+	Percent float64 `json:"percent,omitempty"`
+	Error   string  `json:"error,omitempty"`
 }
 ```
 
-## Important Notes
+The backend emits `Type` values `state`, `step-start`, `step-end`, `progress`
+and `log`; a failure arrives as a `state` event with `Error` set. A pipeline
+step that implements `CleanupStep` is cleaned up in reverse order when a later
+step fails.
 
-- Never write to `/dev/disk0` (boot drive protection in `internal/installers/linux/ubuntu/ubuntu.go`)
-- Raw device writes use `/dev/rdisk*` on macOS for speed
-- FAT32 max file size is ~4GB, hence wimlib splitting for Windows
-- Privileged helper verifies client code signature before accepting commands
+## Safety rules
 
-## Documentation
+Both installers refuse a target whose ID ends in `disk0`, and require the device
+to appear in `drives.ListRemovable`. Enforced in `Plan`:
+`internal/installers/linux/linux.go` and
+`internal/installers/windows/windows.go`. Both checks are skipped when
+`core.DryRun` is set (`DRY_RUN=1`), which also swaps in `drives.MockProvider`.
 
-See `/docs/` for detailed architecture docs:
-- `ARCHITECTURE.md` - High-level overview
-- `BACKEND.md` - Services, jobs, steps
-- `MODULES/*.md` - Per-module deep dives
+On macOS the privileged helper rewrites the target to the raw `/dev/rdisk*`
+node before writing, for speed (`helpers/darwin/BBPrivilegedHelper.m`).
+
+## Docs
+
+- `docs/handovers/README.md` - how delegated work briefs are written, and the
+  open briefs
+- `docs/spikes/` - spike write-ups
+- `DEV_SETUP.md` - local toolchain setup
+
+`docs/` is gitignored; it is local-only context, not part of the repo.
