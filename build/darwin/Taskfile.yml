@@ -220,6 +220,11 @@ tasks:
           codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign - "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
           codesign --force --options runtime --timestamp=none --entitlements build/darwin/entitlements.plist --sign - "{{.APP}}"
         fi
-      - '"{{.APP}}/Contents/MacOS/{{.APP_NAME}}"'
+      # Through LaunchServices, not exec: a process started from the terminal
+      # has Terminal as its TCC responsible process, and the Removable Volumes
+      # prompt and grant would go to Terminal instead of the bundle.
+      - pkill -f "{{.APP}}/Contents/MacOS/{{.APP_NAME}}" || true
+      - open -W --stdout "{{.LOG}}" --stderr "{{.LOG}}" "{{.APP}}"
     vars:
       APP: '{{.BIN_DIR}}/{{.APP_NAME}}.dev.app'
+      LOG: '{{.BIN_DIR}}/{{.APP_NAME}}.dev.log'

@@ -59,7 +59,10 @@ task dev
 
 This builds the app and the helper, assembles `bin/FlashIt.dev.app` with the
 helper at `Contents/MacOS/flashit-helper`, signs both with the dev
-certificate and the hardened runtime, and launches the app.
+certificate and the hardened runtime, and launches the app through `open`
+so macOS attributes the Removable Volumes prompt to the bundle rather than
+to Terminal. The app's log, including the helper's lines prefixed
+`helper:`, goes to `bin/FlashIt.dev.log`.
 
 The first flash on a fresh machine shows two prompts: `"FlashIt" would like
 to access files on a removable volume` (Allow), then the password sheet
@@ -77,9 +80,12 @@ tccutil reset SystemPolicyRemovableVolumes dev.kyleupton.flashit
 
 ## Watching the helper
 
-The helper's log goes to the app's log, prefixed `helper:`. While a write
-runs, `lsof /dev/rdiskN` lists only `flashit-helper`; authd's view of the
-sheet is in `log stream --predicate 'process == "authd"'`.
+```bash
+tail -f bin/FlashIt.dev.log
+```
+
+While a write runs, `lsof /dev/rdiskN` lists only `flashit-helper`; authd's
+view of the sheet is in `log stream --predicate 'process == "authd"'`.
 
 ## Release builds
 
