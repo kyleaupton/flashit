@@ -1,217 +1,95 @@
-# Development Setup for XPC Privileged Helper
+# Development setup (macOS)
 
-This guide explains how to set up your development environment to work with the privileged helper without needing to build for production each time.
+FlashIt does its disk work through a privileged helper. On macOS that is a
+launchd daemon inside the app bundle, registered with `SMAppService` on
+first use. The daemon only talks to processes signed as `dev.kyleupton.flashit`
+with a known certificate, so a dev build needs a code signing identity.
 
-## Overview
+## One-time: create the dev certificate
 
-The app uses an XPC privileged helper to perform disk operations without requiring the entire app to run as root. For development, we need:
-
-1. A self-signed code signing certificate
-2. A manually installed helper (stays running between dev sessions)
-3. Auto-signing of the main binary after each build
-
-## One-Time Setup
-
-### Step 1: Create Development Certificate
-
-You need to manually create a code signing certificate using Keychain Access:
-
-1. Open **Keychain Access** (Applications → Utilities → Keychain Access)
-2. From the menu: **Keychain Access** → **Certificate Assistant** → **Create a Certificate...**
-3. Fill in the form:
-   - **Name**: `FlashIt Dev Code Signing` (exactly this name)
+1. Open **Keychain Access** (Applications › Utilities).
+2. **Keychain Access › Certificate Assistant › Create a Certificate…**
+3. Fill in:
+   - **Name**: `FlashIt Dev Code Signing` (exactly this)
    - **Identity Type**: Self Signed Root
-   - **Certificate Type**: Code Signing ⚠️ **Make sure this says "Code Signing" not "Root Certificate"**
-   - Click **Create**
-   - Click **Continue** when prompted about adding to keychain
-   - Click **Done**
+   - **Certificate Type**: **Code Signing** (not "Root Certificate")
+4. Create, Continue, Done. It lands in the login keychain, valid for a year.
 
-The certificate will be added to your login keychain and is valid for 1 year by default.
-
-**Important**: The certificate must have "Code Signing" as its type. If you see "Self-signed root certificate" in the details, delete it and create it again, making sure to select "Code Signing" from the Certificate Type dropdown.
-
-**Verify it worked:**
+Check it:
 
 ```bash
-security find-certificate -c "FlashIt Dev Code Signing" -a ~/Library/Keychains/login.keychain-db
+security find-certificate -c "FlashIt Dev Code Signing" -Z | grep SHA-1
 ```
 
-You should see output showing the certificate details. If the command returns without error, the certificate was created successfully.
+The hash printed is what the helper is built to accept. The identity does
+not appear in `security find-identity -p codesigning`; that is normal for a
+self-signed certificate and does not matter.
 
-### Step 2: Install Privileged Helper
+If the details window says "Self-signed root certificate", delete it (and its
+private key) and create it again with **Code Signing** selected.
 
-Build and install the helper (requires sudo password):
+## Daily workflow
 
 ```bash
-./scripts/install-helper-dev.sh
+task dev
 ```
 
-This:
+This builds the app and the helper, assembles `bin/FlashIt.dev.app` with the
+helper and its launchd plist inside, signs everything with the dev
+certificate, and launches the app. Without the certificate the bundle is
+signed ad hoc, a warning is printed, and the helper refuses the app.
 
-- Builds the helper signed with your dev certificate
-- Installs it to `/Library/PrivilegedHelperTools/`
-- Loads it with launchd
+The first time a flash starts, the app registers the daemon and macOS shows
+"Background Items Added". The flash fails with a "Permission needed" panel:
+click **Open System Settings**, switch **FlashIt** on under Login Items &
+Extensions › Allow in the Background, then **Try again**. From then on the
+daemon runs as root under launchd and every launch of the app finds it.
 
-**Verify it's running:**
+Each flash raises exactly one authorization sheet ("FlashIt needs to write to
+a removable drive."), raised by the helper right before the destructive step.
+
+When the helper's sources change, `task dev` bakes a new version stamp into
+it; the app notices on its next connection, unregisters and registers the
+daemon again. Registering can keep failing for about a minute after an
+unregister; the app retries on its own. No System Settings visit is needed.
+
+## Watching the helper
 
 ```bash
-sudo launchctl list | grep dev.kyleupton.flashit.helper
+tail -f /var/log/dev.kyleupton.flashit.helper.log
+launchctl print system/dev.kyleupton.flashit.helper | grep -E 'state|runs|last exit'
+security authorizationdb read dev.kyleupton.flashit.write
 ```
 
-You should see it listed with a PID.
+## Clean slate
 
-### Step 3: Update Helper Info.plist (Done)
-
-The helper's `SMAuthorizedClients` is already configured to accept binaries signed with the dev certificate:
-
-```xml
-<key>SMAuthorizedClients</key>
-<array>
-    <string>identifier "dev.kyleupton.flashit"</string>
-</array>
-```
-
-## Daily Development Workflow
-
-Once setup is complete, your workflow is simple:
+Unregistering leaves the socket and the authorization right behind; they
+are ours to remove. The Background Items record stays (only
+`sfltool resetbtm` clears those, for every app, so leave it).
 
 ```bash
-wails3 dev
+sudo launchctl bootout system/dev.kyleupton.flashit.helper
+sudo security authorizationdb remove dev.kyleupton.flashit.write
+sudo pkill -f flashit-helper
+sudo rm -f /var/run/dev.kyleupton.flashit.sock /var/log/dev.kyleupton.flashit.helper.log
+rm -rf bin/FlashIt.dev.app
 ```
 
-**What happens automatically:**
+### Machines that ran the old helper
 
-1. Wails builds your Go binary
-2. **Post-build hook signs the binary** with your dev certificate (`scripts/sign-dev-binary.sh`)
-3. App runs and connects to the already-running helper via XPC
-
-**No sudo required!** (except for the one-time helper install)
-
-## When to Reinstall Helper
-
-You only need to run `./scripts/install-helper-dev.sh` again if:
-
-- You modify helper code (`helpers/darwin/*.m`)
-- You update the helper's Info.plist
-- You update the launchd.plist
-
-For changes to the main app, the auto-signing hook handles it.
-
-## Monitoring & Debugging
-
-### View Helper Logs
+Builds before the Go helper installed an SMJobBless daemon under the same
+label. `SMAppService` reports it as enabled and the app refuses to proceed
+until it is gone:
 
 ```bash
-log stream --predicate 'process == "dev.kyleupton.flashit.helper"' --level debug
+sudo launchctl bootout system/dev.kyleupton.flashit.helper
+sudo rm -f /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist \
+           /Library/PrivilegedHelperTools/dev.kyleupton.flashit.helper
 ```
 
-### Check Helper Status
+## Release builds
 
-```bash
-sudo launchctl list | grep dev.kyleupton.flashit.helper
-```
-
-### Restart Helper
-
-```bash
-sudo launchctl unload /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist
-sudo launchctl load /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist
-```
-
-### Verify Binary Signature
-
-```bash
-codesign -vvv bin/flashit
-```
-
-Should show:
-
-```
-identifier=dev.kyleupton.flashit
-...
-valid on disk
-satisfies its Designated Requirement
-```
-
-## Uninstalling Dev Helper
-
-To clean up:
-
-```bash
-sudo launchctl unload /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist
-sudo rm /Library/PrivilegedHelperTools/dev.kyleupton.flashit.helper
-sudo rm /Library/LaunchDaemons/dev.kyleupton.flashit.helper.plist
-```
-
-## Testing Disk Operations
-
-### Create a Test Disk Image
-
-Instead of using a real USB drive:
-
-```bash
-hdiutil create -size 2g -fs FAT32 -volname "TEST" -type SPARSE test-usb.sparseimage
-hdiutil attach test-usb.sparseimage
-```
-
-This creates `/dev/diskN` that you can safely test against.
-
-**Note:** Your drive detection filters for USB protocol, so you may need to temporarily relax that filter to see disk images.
-
-### Unmount When Done
-
-```bash
-hdiutil detach /dev/diskN
-```
-
-## Troubleshooting
-
-### Certificate not showing as signing identity
-
-If you created the certificate but `security find-certificate -c "FlashIt Dev Code Signing" -a ~/Library/Keychains/login.keychain-db` fails:
-
-1. Open Keychain Access and find "FlashIt Dev Code Signing"
-2. Double-click it and check if it says "Self-signed root certificate" in the title
-3. If so, delete it (also delete the associated private key)
-4. Create it again, making absolutely sure you select **"Code Signing"** from the Certificate Type dropdown
-5. The dropdown has many options - scroll down to find "Code Signing"
-
-### "SMJobBless failed: Error Domain=CFErrorDomainLaunchd Code=2"
-
-This means the helper isn't installed or the signatures don't match.
-
-**Fix:**
-
-1. Verify dev certificate exists: `security find-certificate -c "FlashIt Dev Code Signing" -a ~/Library/Keychains/login.keychain-db`
-2. Reinstall helper: `./scripts/install-helper-dev.sh`
-3. Verify binary is signed: `codesign -vvv bin/flashit`
-
-### "XPC connection failed"
-
-Check if helper is running:
-
-```bash
-sudo launchctl list | grep dev.kyleupton.flashit.helper
-```
-
-If not listed, reinstall with `./scripts/install-helper-dev.sh`.
-
-Check Console.app for XPC errors.
-
-### Binary Not Auto-Signing
-
-The hook runs after every build. If it's not working:
-
-1. Check `build/config.yml` has the signing step
-2. Run manually: `./scripts/sign-dev-binary.sh bin/flashit`
-3. Check script has execute permission: `ls -la scripts/sign-dev-binary.sh`
-
-## Production Builds
-
-For production, the helper is:
-
-- Embedded in the app bundle at `Contents/Library/LaunchServices/`
-- Signed with a proper Developer ID certificate (or ad-hoc for local testing)
-- Installed via SMJobBless when first needed
-
-The production flow is handled by `task package` in `build/darwin/Taskfile.yml`.
+`task darwin:package` builds `bin/FlashIt.app` signed with
+`APPLE_SIGNING_IDENTITY` (ad hoc when unset) and bakes `APPLE_TEAM_ID` into
+the helper, so it accepts any FlashIt signed by that team. The release
+workflow then notarizes the bundle.

@@ -28,10 +28,9 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 - Task (`Taskfile.yml`) drives build and dev
 
 WIM reading, splitting and LZX decompression are pure Go in `internal/wim`;
-there is no wimlib dependency. The one cgo package is the macOS
-privileged-helper client `internal/priv/macos/xpc`, behind the `flashitxpc`
-build tag. Every macOS build must set that tag, or `priv.NewClient` compiles to
-the stub in `internal/priv/macos/client_darwin_noxpc.go` and returns nil.
+there is no wimlib dependency. cgo is used only on macOS: the helper daemon's
+Security/DiskArbitration bindings in `internal/helper/*_darwin.{c,h}` and the
+app's SMAppService/Authorization shim in `internal/priv/shim_darwin.{m,h}`.
 
 ## Layout
 
@@ -40,7 +39,7 @@ main.go, version.go          Wails app entry point, service registration
 internal/core/               Shared contracts: Plan, Runnable, Event, Installer
 internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
 internal/jobs/               Job manager: enqueue, run, cancel
-internal/service/            Wails services: JobsService, DrivesService
+internal/service/            Wails services: JobsService, DrivesService, PrivService
 internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
@@ -48,25 +47,25 @@ internal/iso/                Hybrid ISO validation and ISO mounting per OS
 internal/wim/                WIM reader, splitter, lzx/ decompressor
 internal/fs/                 File copy, APFS clone on darwin
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol v2)
-internal/helper/             Root-side helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, helpertest/ holds fakes
-internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), darwin/ and windows/ (old helpers)
+internal/helper/             Root-side helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,auth,authz,listen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
+internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + shim_darwin.m (SMAppService daemon), windows/ (old helper)
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
-cmd/flashit-helper/          Go privileged helper entry point (Linux today; -socket, -idle)
+cmd/flashit-helper/          Go privileged helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (launchd daemon)
 cmd/wimtest/                 CLI for exercising the WIM splitter
-helpers/                     Old ObjC (darwin) and C (windows) privileged helpers, still shipped
+helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
-build/                       Per-platform Taskfiles and packaging config
+build/                       Per-platform Taskfiles and packaging config; build/darwin holds the daemon's launchd plist
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
 
 ## Commands
 
 ```bash
-task dev                  # hot-reload dev build
-task build                # build for the host OS into bin/ (sets flashitxpc on macOS)
-go test ./...             # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/iso, internal/drives (linux-only)
-go build -tags flashitxpc ./...   # on macOS, to compile the real XPC client
+task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
+task build                # build for the host OS into bin/
+task darwin:package       # signed release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/iso, internal/drives (linux-only)
 GOOS=linux go build ./cmd/flashit-helper   # cross-compile the Go helper; `task linux:build:helper` puts it in bin/helpers/
 wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
 cd frontend && npm run build      # main.go embeds frontend/dist, so build it before any go build
@@ -82,7 +81,7 @@ Host OS support:
 
 | Host    | Drive listing | ISO mount | Privileged helper |
 | ------- | ------------- | --------- | ----------------- |
-| macOS   | yes (`diskutil`) | yes (`hdiutil`) | launchd + XPC |
+| macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` as a launchd daemon in the bundle (`SMAppService`), unix socket at `/var/run/dev.kyleupton.flashit.sock` |
 | Linux   | yes (`lsblk`) | no, stub returns an error | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
 | Windows | yes (PowerShell) | yes | named-pipe helper |
 
@@ -130,24 +129,38 @@ to appear in `drives.ListRemovable`. Enforced in `Plan`:
 `internal/installers/windows/windows.go`. Both checks are skipped when
 `core.DryRun` is set (`DRY_RUN=1`), which also swaps in `drives.MockProvider`.
 
-On macOS the privileged helper rewrites the target to the raw `/dev/rdisk*`
-node before writing, for speed (`helpers/darwin/BBPrivilegedHelper.m`).
-
-On Linux the helper trusts nothing the app says. `internal/helper/validate`
+The Go helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block
-nodes, non-removable disks (sysfs `removable` or a USB ancestor), any whole
-disk backing `/`, `/boot`, `/home` and friends (resolved through dm/md slaves,
-fail closed; btrfs and ZFS roots resolved through the mount source), sources
-that are not regular files owned by the caller with the claimed size, images
-larger than the device, and labels outside `^[A-Za-z0-9_ -]{1,11}$`. Only
-`fat32` formats. The caller must have the `SO_PEERCRED` uid equal to
-`PKEXEC_UID`; the socket lives in a 0700 directory the app creates.
+nodes, non-removable disks, any whole disk backing the running system,
+sources that are not regular files owned by the caller with the claimed
+size, images larger than the device, and labels outside
+`^[A-Za-z0-9_ -]{1,11}$`. Only `fat32` formats. Validation runs before any
+prompt, so a refused request never costs the user a sheet.
+
+Linux: removable means sysfs `removable` or a USB ancestor; system disks are
+resolved from `/`, `/boot`, `/home` and friends through dm/md slaves (btrfs
+and ZFS roots through the mount source), fail closed. The caller's
+`SO_PEERCRED` uid must equal `PKEXEC_UID`; the socket lives in a 0700
+directory the app creates.
+
+macOS: every connection is checked by `LOCAL_PEERTOKEN` audit token against
+a code requirement baked in at build time (`identifier "dev.kyleupton.flashit"
+and certificate leaf = H"<dev cert SHA-1>"` for dev builds, `anchor apple
+generic and certificate leaf[subject.OU] = "<team>"` for releases). Removable
+means `diskutil` reports RemovableMedia or Ejectable, not Internal, and not
+Virtual (disk images and synthesized APFS containers are refused). The system
+disks are the physical stores behind the APFS container mounted at `/`.
+`write_image` and `format_disk` carry the external form of an
+`AuthorizationRef`; the helper redeems it for the right
+`dev.kyleupton.flashit.write` (which it creates on first start), so the
+password sheet is raised by the helper right before the destructive step, one
+per flash. Raw writes go to `/dev/rdiskN` under a Disk Arbitration claim.
 
 ## Docs
 
 - `docs/handovers/README.md` - how delegated work briefs are written, and the
   open briefs
 - `docs/spikes/` - spike write-ups
-- `DEV_SETUP.md` - local toolchain setup
+- `DEV_SETUP.md` - macOS dev certificate, daemon approval, clean-slate commands
 
 `docs/` is gitignored; it is local-only context, not part of the repo.

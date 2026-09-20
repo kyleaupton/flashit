@@ -2,7 +2,6 @@
 .task
 bin
 build/darwin/Info.plist
-helpers/darwin/Info.plist
 frontend/dist
 frontend/node_modules
 build/linux/appimage/build
