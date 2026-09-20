@@ -47,11 +47,14 @@ internal/drives/             Removable drive enumeration per OS (+ mock provider
 internal/iso/                Hybrid ISO validation and ISO mounting per OS
 internal/wim/                WIM reader, splitter, lzx/ decompressor
 internal/fs/                 File copy, APFS clone on darwin
-internal/priv/               Privileged service clients (darwin/linux/windows)
+internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol v2)
+internal/helper/             Root-side helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, helpertest/ holds fakes
+internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), darwin/ and windows/ (old helpers)
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
+cmd/flashit-helper/          Go privileged helper entry point (Linux today; -socket, -idle)
 cmd/wimtest/                 CLI for exercising the WIM splitter
-helpers/                     Privileged helper daemons, one per OS (helpers/linux is its own Go module)
+helpers/                     Old ObjC (darwin) and C (windows) privileged helpers, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
 build/                       Per-platform Taskfiles and packaging config
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
@@ -62,15 +65,16 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```bash
 task dev                  # hot-reload dev build
 task build                # build for the host OS into bin/ (sets flashitxpc on macOS)
-go test ./...             # tests live in internal/pipeline, internal/iso, internal/drives (linux-only)
+go test ./...             # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/iso, internal/drives (linux-only)
 go build -tags flashitxpc ./...   # on macOS, to compile the real XPC client
+GOOS=linux go build ./cmd/flashit-helper   # cross-compile the Go helper; `task linux:build:helper` puts it in bin/helpers/
 wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
 cd frontend && npm run build      # main.go embeds frontend/dist, so build it before any go build
 cd frontend && npm run type-check
 ```
 
-`helpers/linux` is a separate module and only builds for Linux:
-`cd helpers/linux && GOOS=linux go build ./...`.
+`GOOS=linux go build ./...` fails on macOS because the Wails Linux backend
+needs cgo; cross-check with `GOOS=linux go build ./internal/... ./cmd/...`.
 
 ## Status
 
@@ -79,7 +83,7 @@ Host OS support:
 | Host    | Drive listing | ISO mount | Privileged helper |
 | ------- | ------------- | --------- | ----------------- |
 | macOS   | yes (`diskutil`) | yes (`hdiutil`) | launchd + XPC |
-| Linux   | yes (`lsblk`) | no, stub returns an error | helper over a socket |
+| Linux   | yes (`lsblk`) | no, stub returns an error | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
 | Windows | yes (PowerShell) | yes | named-pipe helper |
 
 Installer support, derived from `Plan` guards:
@@ -128,6 +132,15 @@ to appear in `drives.ListRemovable`. Enforced in `Plan`:
 
 On macOS the privileged helper rewrites the target to the raw `/dev/rdisk*`
 node before writing, for speed (`helpers/darwin/BBPrivilegedHelper.m`).
+
+On Linux the helper trusts nothing the app says. `internal/helper/validate`
+rejects device paths outside `/dev` or containing `..`, partitions, non-block
+nodes, non-removable disks (sysfs `removable` or a USB ancestor), any whole
+disk backing `/`, `/boot`, `/home` and friends (resolved through dm/md slaves,
+fail closed), sources that are not regular files of the claimed size, images
+larger than the device, and labels outside `^[A-Za-z0-9_ -]{1,11}$`. Only
+`fat32` formats. The caller must have the `SO_PEERCRED` uid equal to
+`PKEXEC_UID`; the socket lives in a 0700 directory the app creates.
 
 ## Docs
 

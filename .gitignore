@@ -1,7 +1,6 @@
 .env
 .task
 bin
-helpers/linux/flashit-helper-linux
 build/darwin/Info.plist
 helpers/darwin/Info.plist
 frontend/dist
