@@ -69,13 +69,12 @@ jobs:
       - name: Test
         run: go test ./...
 
-      # Every real macOS build sets flashitxpc; without it the XPC client
-      # compiles as a stub and the cgo path is never checked.
-      - name: Vet and build with flashitxpc
+      # The macOS daemon is cgo (Security, DiskArbitration, ServiceManagement)
+      # and only compiles here; `go build ./...` above covers it, this makes
+      # a break in it show up by name.
+      - name: Build macOS helper
         if: runner.os == 'macOS'
-        run: |
-          go vet -tags flashitxpc ./...
-          go build -tags flashitxpc ./...
+        run: go build -o /dev/null ./cmd/flashit-helper
 
       # The Ubuntu leg builds the helper natively via `go build ./...`; this
       # keeps the linux-tagged files honest from the other host too.

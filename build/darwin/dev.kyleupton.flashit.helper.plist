@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.kyleupton.flashit.helper</string>
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/flashit-helper</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>flashit-helper</string>
+	</array>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>dev.kyleupton.flashit</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>StandardErrorPath</key>
+	<string>/var/log/dev.kyleupton.flashit.helper.log</string>
+</dict>
+</plist>
