@@ -17,12 +17,12 @@ license: "GPL-3.0"
 release: "1"
 
 contents:
-  - src: "./bin/flashit"
-    dst: "/usr/local/bin/flashit"
+  - src: "./bin/FlashIt"
+    dst: "/usr/local/bin/FlashIt"
   - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/flashit.png"
-  - src: "./build/linux/flashit.desktop"
-    dst: "/usr/share/applications/flashit.desktop"
+    dst: "/usr/share/icons/hicolor/128x128/apps/FlashIt.png"
+  - src: "./build/linux/FlashIt.desktop"
+    dst: "/usr/share/applications/FlashIt.desktop"
 
 # Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
 depends:

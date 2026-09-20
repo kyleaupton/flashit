@@ -10,6 +10,11 @@ tasks:
     cmds:
       - task: clean
       - task: compile
+        vars:
+          BUILD_FLAGS: '{{.BUILD_FLAGS}}'
+          GOOS: '{{.GOOS}}'
+          GOARCH: '{{.GOARCH}}'
+          CGO_ENABLED: '{{.CGO_ENABLED}}'
 
   clean:
     summary: Remove old build artifacts
@@ -18,6 +23,10 @@ tasks:
 
   compile:
     summary: Compile the helper binary
+    env:
+      GOOS: '{{.GOOS | default "linux"}}'
+      GOARCH: '{{.GOARCH | default ARCH}}'
+      CGO_ENABLED: '{{.CGO_ENABLED | default "1"}}'
     cmds:
       - mkdir -p {{.BUILD_DIR}}
       - go build {{.BUILD_FLAGS}} -o {{.BUILD_DIR}}/{{.HELPER_NAME}} .

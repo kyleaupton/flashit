@@ -35,9 +35,7 @@ tasks:
     vars:
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
-      # Determine target architecture (defaults to host ARCH if not specified)
       TARGET_ARCH: '{{.ARCH | default ARCH}}'
-      # Check if a C compiler is available (gcc or clang) — cross-platform via wails3 tool
       HAS_CC:
         sh: 'wails3 tool has "gcc|clang"'
 
@@ -98,8 +96,6 @@ tasks:
       DOCKER_ARCH: '{{.ARCH | default "amd64"}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
-      # Generate Docker volume mounts: Go module cache + go.mod replace directives
-      # Uses wails3 tool docker-mounts for cross-platform compatibility (Windows/Linux/macOS)
       DOCKER_MOUNTS:
         sh: 'wails3 tool docker-mounts'
 
@@ -107,12 +103,11 @@ tasks:
     summary: Build the privileged helper
     cmds:
       - task: helper:build
-    vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
-    env:
-      GOOS: linux
-      CGO_ENABLED: 1
-      GOARCH: '{{.ARCH | default ARCH}}'
+        vars:
+          BUILD_FLAGS: '{{if eq .DEV "true"}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+          GOOS: linux
+          GOARCH: '{{.ARCH | default ARCH}}'
+          CGO_ENABLED: '{{.CGO_ENABLED | default "1"}}'
 
   package:
     summary: Packages the application for Linux
