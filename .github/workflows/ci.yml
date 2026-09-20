@@ -77,13 +77,13 @@ jobs:
           go vet -tags flashitxpc ./...
           go build -tags flashitxpc ./...
 
-      - name: Vet helper (linux)
-        run: GOOS=linux go vet ./...
-        working-directory: helpers/linux
-
-      - name: Build helper (linux)
-        run: GOOS=linux go build -o /dev/null ./...
-        working-directory: helpers/linux
+      # The Ubuntu leg builds the helper natively via `go build ./...`; this
+      # keeps the linux-tagged files honest from the other host too.
+      - name: Cross-build helper for Linux
+        if: runner.os == 'macOS'
+        run: |
+          GOOS=linux go vet ./cmd/flashit-helper ./internal/helper/... ./internal/priv/...
+          GOOS=linux go build -o /dev/null ./cmd/flashit-helper
 
   frontend:
     name: Frontend

@@ -1,27 +1,30 @@
 package priv
 
-import "context"
+import (
+	"context"
+	"errors"
+)
 
-// ProgressFunc is the callback type for write progress updates.
-// bytesWritten: total bytes written so far
-// totalBytes: total size of the ISO
+// ErrHelperNotRunning is returned by DiskOps when EnsureReady has not
+// succeeded for this session.
+var ErrHelperNotRunning = errors.New("privileged helper is not running")
+
+// ProgressFunc receives (bytesWritten, totalBytes) during a write.
 type ProgressFunc func(bytesWritten, totalBytes uint64)
 
-// DiskOps defines privileged disk operations.
+// DiskOps is the privileged operation set the installers can reach.
 type DiskOps interface {
-	// WriteISO writes a Linux ISO to a disk device.
-	// On macOS, this uses Disk Arbitration to claim exclusive access and direct I/O.
-	// On Linux, this would use dd with pkexec.
-	// This is a long-running operation that handles unmount and eject internally.
-	// The progress callback receives (bytesWritten, totalBytes) updates during the write.
-	// Pass nil if progress updates are not needed.
+	// WriteISO streams isoPath onto the whole device. Unmounting the device's
+	// partitions and syncing at the end are the helper's job.
 	WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error
 
-	// FormatDisk formats a disk with the specified filesystem.
-	// On macOS, this uses diskutil eraseDisk.
-	// Supported filesystems: FAT32, ExFAT, APFS, HFS+
-	// The volumeName is the label for the new volume.
+	// FormatDisk writes a single-partition layout with the given filesystem
+	// and label. Supported values depend on the host helper; every host
+	// accepts FAT32.
 	FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error
+
+	// Eject detaches the device once writing is done.
+	Eject(ctx context.Context, device string) error
 }
 
 // PrivilegedService provides access to privileged operations.
