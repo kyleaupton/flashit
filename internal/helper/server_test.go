@@ -793,3 +793,158 @@ func TestIdleTimerNotRearmedByPreviousOp(t *testing.T) {
 		}
 	}
 }
+
+func TestAuthorizerGatesDestructiveOps(t *testing.T) {
+	const size = 4096
+	src := sourceFile(t, size)
+	write := func(token string) proto.WriteImageParams {
+		return proto.WriteImageParams{Device: helpertest.Removable, Source: src, Size: size, Authorization: token}
+	}
+	format := func(token string) proto.FormatDiskParams {
+		return proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "X", Authorization: token}
+	}
+
+	t.Run("missing token", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		az := &helpertest.FakeAuthorizer{Token: "good"}
+		opts := testOptions()
+		opts.Authorizer = az
+		c := serve(t, disk, opts)
+		c.ping()
+		_, resp := c.call("1", proto.OpWriteImage, write(""))
+		wantError(t, resp, proto.CodeUnauthorized)
+		_, resp = c.call("2", proto.OpFormatDisk, format(""))
+		wantError(t, resp, proto.CodeUnauthorized)
+		if disk.Raw != nil || len(disk.Formats) != 0 || len(disk.Unmounted) != 0 {
+			t.Fatalf("refused op touched the disk: raw=%v formats=%v unmounted=%v", disk.Raw, disk.Formats, disk.Unmounted)
+		}
+		if az.CallCount() != 2 {
+			t.Fatalf("authorizer called %d times", az.CallCount())
+		}
+	})
+
+	t.Run("wrong token", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		opts := testOptions()
+		opts.Authorizer = &helpertest.FakeAuthorizer{Token: "good"}
+		c := serve(t, disk, opts)
+		c.ping()
+		_, resp := c.call("1", proto.OpWriteImage, write("forged"))
+		wantError(t, resp, proto.CodeUnauthorized)
+		if strings.Contains(resp.Message, "forged") || strings.Contains(resp.Message, "good") {
+			t.Fatalf("message leaks the token: %q", resp.Message)
+		}
+		_, resp = c.call("2", proto.OpFormatDisk, format("forged"))
+		wantError(t, resp, proto.CodeUnauthorized)
+		if disk.Raw != nil || len(disk.Formats) != 0 || len(disk.Unmounted) != 0 {
+			t.Fatal("refused op touched the disk")
+		}
+		// The session is still usable, and the token is required per op.
+		_, resp = c.call("3", proto.OpWriteImage, write("good"))
+		wantResult(t, resp)
+		_, resp = c.call("4", proto.OpWriteImage, write("forged"))
+		wantError(t, resp, proto.CodeUnauthorized)
+	})
+
+	t.Run("validation runs before the prompt", func(t *testing.T) {
+		az := &helpertest.FakeAuthorizer{Token: "good"}
+		opts := testOptions()
+		opts.Authorizer = az
+		c := serve(t, helpertest.NewFakeDisk(), opts)
+		c.ping()
+		for _, p := range []proto.WriteImageParams{
+			{Device: helpertest.System, Source: src, Size: size, Authorization: "good"},
+			{Device: helpertest.Internal, Source: src, Size: size, Authorization: "good"},
+			{Device: helpertest.Removable, Source: src, Size: size + 1, Authorization: "good"},
+		} {
+			_, resp := c.call("1", proto.OpWriteImage, p)
+			if resp.Type != proto.TypeError || resp.Code == proto.CodeUnauthorized {
+				t.Fatalf("expected a validation error, got %+v", resp)
+			}
+		}
+		_, resp := c.call("2", proto.OpFormatDisk, proto.FormatDiskParams{Device: helpertest.Removable, Filesystem: "fat32", Label: "$(id)", Authorization: "good"})
+		wantError(t, resp, proto.CodeInvalidLabel)
+		if az.CallCount() != 0 {
+			t.Fatalf("authorizer prompted %d times for requests that fail validation", az.CallCount())
+		}
+	})
+
+	t.Run("token passes through", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		az := &helpertest.FakeAuthorizer{Token: "good"}
+		opts := testOptions()
+		opts.Authorizer = az
+		c := serve(t, disk, opts)
+		c.ping()
+		_, resp := c.call("1", proto.OpFormatDisk, format("good"))
+		wantResult(t, resp)
+		_, resp = c.call("2", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+		wantResult(t, resp)
+		_, resp = c.call("3", proto.OpUnmount, proto.UnmountParams{Device: helpertest.Removable})
+		wantResult(t, resp)
+		if len(az.Calls) != 1 || az.Calls[0] != proto.OpFormatDisk {
+			t.Fatalf("authorizer calls %v, want only format_disk", az.Calls)
+		}
+	})
+}
+
+func TestServeForeverServesClientsInTurn(t *testing.T) {
+	ln := helpertest.NewPipeListener()
+	defer ln.Close()
+	opts := testOptions()
+	opts.IdleTimeout = 100 * time.Millisecond
+	srv := helper.New(helpertest.NewFakeDisk(), helpertest.FakeAuth{}, opts)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.ServeForever(ctx, ln) }()
+
+	// Nobody connects for longer than the idle timeout; the daemon stays up.
+	time.Sleep(3 * opts.IdleTimeout)
+	select {
+	case err := <-done:
+		t.Fatalf("ServeForever exited without a client: %v", err)
+	default:
+	}
+
+	dial := func() *client {
+		c := &client{t: t, conn: ln.Dial()}
+		c.r = bufio.NewReader(c.conn)
+		_ = c.conn.SetDeadline(time.Now().Add(testTimeout))
+		return c
+	}
+
+	first := dial()
+	first.ping()
+	second := dial()
+	line, err := second.r.ReadBytes('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp proto.Response
+	_ = json.Unmarshal(line, &resp)
+	wantError(t, resp, proto.CodeBusy)
+
+	// An idle client loses its session and the next one is served.
+	time.Sleep(3 * opts.IdleTimeout)
+	first.expectClosed()
+	third := dial()
+	third.ping()
+	third.conn.Close()
+	// Teardown of a closed session is asynchronous; a dial that lands in
+	// that window is answered busy, which is the client's problem to retry.
+	time.Sleep(50 * time.Millisecond)
+
+	fourth := dial()
+	fourth.ping()
+
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ServeForever returned %v", err)
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("ServeForever ignored context cancellation")
+	}
+	fourth.expectClosed()
+}

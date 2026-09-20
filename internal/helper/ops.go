@@ -68,6 +68,21 @@ func (sess *session) resolveTarget(op proto.Op, requested string) (DeviceInfo, e
 	return info, nil
 }
 
+// authorize asks the host's Authorizer, if any, whether the user approved op.
+// Any failure is reported as unauthorized; the reason stays in the log.
+func (sess *session) authorize(op proto.Op, token string) error {
+	az := sess.s.opts.Authorizer
+	if az == nil {
+		return nil
+	}
+	if err := az.Authorize(op, token); err != nil {
+		sess.s.opts.Logger.Warn("user authorization refused", "op", op, "uid", sess.peer.UID, "error", err)
+		return proto.Errorf(proto.CodeUnauthorized, "%s was not authorized by the user", op)
+	}
+	sess.s.opts.Logger.Info("user authorized", "op", op, "uid", sess.peer.UID)
+	return nil
+}
+
 func (sess *session) unmountAll(info DeviceInfo) error {
 	parts, err := sess.s.disk.Partitions(info.Path)
 	if err != nil {
@@ -105,6 +120,9 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 		return err
 	}
 	if err := validate.Capacity(p.Size, info); err != nil {
+		return err
+	}
+	if err := sess.authorize(proto.OpWriteImage, p.Authorization); err != nil {
 		return err
 	}
 
@@ -185,6 +203,9 @@ func (sess *session) formatDisk(ctx context.Context, p proto.FormatDiskParams) (
 		return nil, err
 	}
 	if err := validate.Label(p.Label); err != nil {
+		return nil, err
+	}
+	if err := sess.authorize(proto.OpFormatDisk, p.Authorization); err != nil {
 		return nil, err
 	}
 	if err := sess.unmountAll(info); err != nil {

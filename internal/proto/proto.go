@@ -77,16 +77,21 @@ type PingResult struct {
 	EUID     int    `json:"euid"`
 }
 
+// WriteImageParams and FormatDiskParams carry Authorization on macOS: the
+// base64 external form of an AuthorizationRef the helper redeems for the
+// write right. Linux ignores it.
 type WriteImageParams struct {
-	Device string `json:"device"`
-	Source string `json:"source"`
-	Size   int64  `json:"size"`
+	Device        string `json:"device"`
+	Source        string `json:"source"`
+	Size          int64  `json:"size"`
+	Authorization string `json:"authorization,omitempty"`
 }
 
 type FormatDiskParams struct {
-	Device     string `json:"device"`
-	Filesystem string `json:"filesystem"`
-	Label      string `json:"label"`
+	Device        string `json:"device"`
+	Filesystem    string `json:"filesystem"`
+	Label         string `json:"label"`
+	Authorization string `json:"authorization,omitempty"`
 }
 
 type FormatDiskResult struct {

@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>BusProtocol</key>
+	<string>Disk Image</string>
+	<key>Content</key>
+	<string>GUID_partition_scheme</string>
+	<key>DeviceIdentifier</key>
+	<string>disk6</string>
+	<key>DeviceNode</key>
+	<string>/dev/disk6</string>
+	<key>Ejectable</key>
+	<true/>
+	<key>Internal</key>
+	<false/>
+	<key>MediaType</key>
+	<string>Generic</string>
+	<key>ParentWholeDisk</key>
+	<string>disk6</string>
+	<key>RemovableMedia</key>
+	<true/>
+	<key>RemovableMediaOrExternalDevice</key>
+	<true/>
+	<key>Size</key>
+	<integer>9128936960</integer>
+	<key>TotalSize</key>
+	<integer>9128936960</integer>
+	<key>VirtualOrPhysical</key>
+	<string>Virtual</string>
+	<key>WholeDisk</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>APFSContainerReference</key>
+	<string>disk3</string>
+	<key>APFSPhysicalStores</key>
+	<array>
+		<dict>
+			<key>APFSPhysicalStore</key>
+			<string>disk0s2</string>
+		</dict>
+	</array>
+	<key>BusProtocol</key>
+	<string>Apple Fabric</string>
+	<key>Content</key>
+	<string>41504653-0000-11AA-AA11-00306543ECAC</string>
+	<key>DeviceIdentifier</key>
+	<string>disk3s1s1</string>
+	<key>DeviceNode</key>
+	<string>/dev/disk3s1s1</string>
+	<key>Ejectable</key>
+	<false/>
+	<key>FilesystemType</key>
+	<string>apfs</string>
+	<key>Internal</key>
+	<true/>
+	<key>MediaType</key>
+	<string>Generic</string>
+	<key>MountPoint</key>
+	<string>/</string>
+	<key>ParentWholeDisk</key>
+	<string>disk3</string>
+	<key>RemovableMedia</key>
+	<false/>
+	<key>RemovableMediaOrExternalDevice</key>
+	<false/>
+	<key>Size</key>
+	<integer>494384795648</integer>
+	<key>TotalSize</key>
+	<integer>494384795648</integer>
+	<key>VolumeName</key>
+	<string>Macintosh HD</string>
+	<key>WholeDisk</key>
+	<false/>
+</dict>
+</plist>

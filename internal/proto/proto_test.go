@@ -26,13 +26,15 @@ func TestRequestRoundTrip(t *testing.T) {
 		nil,
 		PingParams{Protocol: ProtocolVersion},
 		WriteImageParams{Device: "/dev/sdb", Source: "/tmp/x.iso", Size: 3145728000},
+		WriteImageParams{Device: "/dev/disk4", Source: "/tmp/x.iso", Size: 1, Authorization: "AAAA"},
 		FormatDiskParams{Device: "/dev/sdb", Filesystem: "fat32", Label: "FLASHIT"},
+		FormatDiskParams{Device: "/dev/disk4", Filesystem: "fat32", Label: "FLASHIT", Authorization: "AAAA"},
 		MountISOParams{Path: "/tmp/x.iso"},
 		UnmountParams{Mountpoint: "/run/media/flashit/FLASHIT"},
 		UnmountParams{Device: "/dev/sdb"},
 		EjectParams{Device: "/dev/sdb"},
 	}
-	ops := []Op{OpPing, OpPing, OpWriteImage, OpFormatDisk, OpMountISO, OpUnmount, OpUnmount, OpEject}
+	ops := []Op{OpPing, OpPing, OpWriteImage, OpWriteImage, OpFormatDisk, OpFormatDisk, OpMountISO, OpUnmount, OpUnmount, OpEject}
 
 	for i, p := range params {
 		req, err := NewRequest("7", ops[i], p)
@@ -63,6 +65,12 @@ func TestRequestFieldNames(t *testing.T) {
 	req, _ := NewRequest("7", OpWriteImage, WriteImageParams{Device: "/dev/sdb", Source: "/tmp/x.iso", Size: 1})
 	raw, _ := json.Marshal(req)
 	want := `{"id":"7","op":"write_image","params":{"device":"/dev/sdb","source":"/tmp/x.iso","size":1}}`
+	if string(raw) != want {
+		t.Fatalf("got %s\nwant %s", raw, want)
+	}
+	req, _ = NewRequest("8", OpFormatDisk, FormatDiskParams{Device: "/dev/disk4", Filesystem: "fat32", Label: "X", Authorization: "AAAA"})
+	raw, _ = json.Marshal(req)
+	want = `{"id":"8","op":"format_disk","params":{"device":"/dev/disk4","filesystem":"fat32","label":"X","authorization":"AAAA"}}`
 	if string(raw) != want {
 		t.Fatalf("got %s\nwant %s", raw, want)
 	}

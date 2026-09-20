@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>APFSContainerReference</key>
+	<string>disk5</string>
+	<key>BusProtocol</key>
+	<string>USB</string>
+	<key>Content</key>
+	<string>Apple_APFS</string>
+	<key>DeviceIdentifier</key>
+	<string>disk4s2</string>
+	<key>DeviceNode</key>
+	<string>/dev/disk4s2</string>
+	<key>Ejectable</key>
+	<true/>
+	<key>Internal</key>
+	<false/>
+	<key>MediaType</key>
+	<string>Generic</string>
+	<key>ParentWholeDisk</key>
+	<string>disk4</string>
+	<key>RemovableMedia</key>
+	<true/>
+	<key>RemovableMediaOrExternalDevice</key>
+	<true/>
+	<key>Size</key>
+	<integer>1000000000</integer>
+	<key>TotalSize</key>
+	<integer>1000000000</integer>
+	<key>VirtualOrPhysical</key>
+	<string>Physical</string>
+	<key>WholeDisk</key>
+	<false/>
+</dict>
+</plist>

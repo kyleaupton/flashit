@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/kyleaupton/flashit/internal/helper"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 const (
@@ -195,6 +196,32 @@ func (a FakeAuth) Authenticate(net.Conn) (helper.Peer, error) {
 		return helper.Peer{}, a.Err
 	}
 	return helper.Peer{UID: a.UID}, nil
+}
+
+// FakeAuthorizer accepts exactly Token and records every call.
+type FakeAuthorizer struct {
+	mu    sync.Mutex
+	Token string
+	Calls []proto.Op
+}
+
+func (a *FakeAuthorizer) Authorize(op proto.Op, token string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Calls = append(a.Calls, op)
+	if token == "" {
+		return fmt.Errorf("no authorization for %s", op)
+	}
+	if token != a.Token {
+		return fmt.Errorf("authorization for %s was refused", op)
+	}
+	return nil
+}
+
+func (a *FakeAuthorizer) CallCount() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.Calls)
 }
 
 // PipeListener is a net.Listener over net.Pipe for tests of the accept loop.

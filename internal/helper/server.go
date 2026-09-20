@@ -29,6 +29,10 @@ type Options struct {
 	WriteBufferSize  int
 	ProgressInterval time.Duration
 	Logger           *slog.Logger
+	// Authorizer gates write_image and format_disk. nil means the host
+	// authorized the user before the helper started (polkit, UAC) and no
+	// per-op check exists.
+	Authorizer Authorizer
 }
 
 type Server struct {
@@ -58,6 +62,17 @@ func New(disk Disk, auth Auth, opts Options) *Server {
 // connection arriving while one is served is answered with busy and closed.
 // It returns ErrIdle when nobody connects or the client goes quiet.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, ln, false)
+}
+
+// ServeForever is Serve for a daemon that outlives its clients: sessions are
+// served one after another and an idle client only ends its own session. It
+// returns when ctx ends or the listener fails.
+func (s *Server) ServeForever(ctx context.Context, ln net.Listener) error {
+	return s.serve(ctx, ln, true)
+}
+
+func (s *Server) serve(ctx context.Context, ln net.Listener, forever bool) error {
 	conns := make(chan net.Conn)
 	acceptErr := make(chan error, 1)
 	done := make(chan struct{})
@@ -79,18 +94,46 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		}
 	}()
 
-	idle := time.NewTimer(s.opts.IdleTimeout)
-	defer idle.Stop()
+	var idle <-chan time.Time
+	if !forever {
+		t := time.NewTimer(s.opts.IdleTimeout)
+		defer t.Stop()
+		idle = t.C
+	}
 
+	// active carries the running session's result; nil means no session.
+	var active chan error
 	for {
 		select {
 		case <-ctx.Done():
+			if active != nil {
+				return <-active
+			}
 			return ctx.Err()
 		case err := <-acceptErr:
 			return err
-		case <-idle.C:
+		case <-idle:
 			return ErrIdle
+		case err := <-active:
+			active = nil
+			if !forever {
+				return err
+			}
+			s.sessionEnded(err)
 		case c := <-conns:
+			if active != nil {
+				select {
+				case err := <-active:
+					active = nil
+					s.sessionEnded(err)
+				default:
+				}
+			}
+			if active != nil {
+				s.opts.Logger.Warn("refused second connection")
+				s.refuse(c, proto.NewError(proto.CodeBusy, "helper already has a client"))
+				continue
+			}
 			peer, err := s.auth.Authenticate(c)
 			if err != nil {
 				s.opts.Logger.Warn("rejected connection", "error", err)
@@ -98,21 +141,19 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 				continue
 			}
 			s.opts.Logger.Info("client connected", "uid", peer.UID)
-			idle.Stop()
-			go func() {
-				for {
-					select {
-					case extra := <-conns:
-						s.opts.Logger.Warn("refused second connection")
-						s.refuse(extra, proto.NewError(proto.CodeBusy, "helper already has a client"))
-					case <-done:
-						return
-					}
-				}
-			}()
-			return s.ServeConn(ctx, c, peer)
+			idle = nil
+			active = make(chan error, 1)
+			go func() { active <- s.ServeConn(ctx, c, peer) }()
 		}
 	}
+}
+
+func (s *Server) sessionEnded(err error) {
+	if err != nil && !errors.Is(err, ErrIdle) && !errors.Is(err, context.Canceled) {
+		s.opts.Logger.Warn("session ended", "error", err)
+		return
+	}
+	s.opts.Logger.Info("client disconnected")
 }
 
 func (s *Server) refuse(c net.Conn, err *proto.Error) {

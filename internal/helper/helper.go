@@ -10,6 +10,7 @@ import (
 	"net"
 
 	"github.com/kyleaupton/flashit/internal/helper/validate"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 type DeviceInfo = validate.DeviceInfo
@@ -54,6 +55,14 @@ type Peer struct {
 // Auth decides whether the process on the other end of conn is the app.
 type Auth interface {
 	Authenticate(conn net.Conn) (Peer, error)
+}
+
+// Authorizer decides whether the user approved a destructive op. token is
+// the request's authorization field, verbatim; the authorizer is free to
+// prompt. It runs after every other check has passed so a refused request
+// never costs the user a prompt.
+type Authorizer interface {
+	Authorize(op proto.Op, token string) error
 }
 
 var (
