@@ -13,9 +13,9 @@ import (
 // This step uses Disk Arbitration to claim exclusive access and direct I/O.
 type Write struct{}
 
-func (Write) Key() string         { return "writing-iso" }
-func (Write) Name() string        { return "Writing ISO to USB" }
-func (Write) HasProgress() bool   { return true }
+func (Write) Key() string       { return "writing-iso" }
+func (Write) Name() string      { return "Writing ISO to USB" }
+func (Write) HasProgress() bool { return true }
 
 func (Write) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

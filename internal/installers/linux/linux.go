@@ -27,21 +27,6 @@ func (l Linux) Targets() []core.Target {
 	return []core.Target{{Family: core.OSLinux}}
 }
 
-func (l Linux) AllowedSources() core.SourceMode {
-	return core.SourceModeSupply
-}
-
-func (l Linux) ValidateHost(ctx context.Context, host core.HostInfo) core.Capability {
-	var reasons []string
-	if !drives.IsSupported() {
-		reasons = append(reasons, "Drive operations not supported on this platform")
-	}
-	if len(reasons) > 0 {
-		return core.Capability{Supported: false, Reasons: reasons}
-	}
-	return core.Capability{Supported: true}
-}
-
 func (l Linux) Plan(ctx context.Context, req core.CreateRequest) (*core.Plan, error) {
 	// Check platform support
 	if !drives.IsSupported() {

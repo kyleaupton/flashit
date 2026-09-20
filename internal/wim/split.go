@@ -26,22 +26,21 @@ type Progress struct {
 
 // SplitOptions configures the WIM split operation.
 type SplitOptions struct {
-	PartSizeMiB    int  // Size of each part in MiB (default: 3800 for FAT32 safety)
-	CheckIntegrity bool // Verify integrity during split (slower) - not yet implemented
+	PartSizeMiB int // Size of each part in MiB (default: 3800 for FAT32 safety)
 }
 
 // splitBlob represents a blob to be written to a split WIM part.
 type splitBlob struct {
-	stream      StreamDescriptor // Original stream descriptor
-	partNumber  int              // Which part this blob is assigned to (1-based)
-	newOffset   int64            // New offset in the destination part
-	isMetadata  bool             // Whether this is a metadata blob
+	stream     StreamDescriptor // Original stream descriptor
+	partNumber int              // Which part this blob is assigned to (1-based)
+	newOffset  int64            // New offset in the destination part
+	isMetadata bool             // Whether this is a metadata blob
 }
 
 // splitPart represents a single SWM part file.
 type splitPart struct {
-	blobs     []*splitBlob
-	dataSize  int64 // Total size of blob data in this part
+	blobs    []*splitBlob
+	dataSize int64 // Total size of blob data in this part
 }
 
 // SplitWithProgress splits a WIM file into multiple SWM parts for FAT32 compatibility.
@@ -144,7 +143,7 @@ func SplitWithProgress(
 			partPath = fmt.Sprintf("%s%d.swm", dstPrefix, partNum)
 		}
 
-		written, err := writeSWMPart(ctx, srcFile, partPath, &srcHeader, newGUID, part, partNum, numParts, func(n int64) bool {
+		_, err = writeSWMPart(ctx, srcFile, partPath, &srcHeader, newGUID, part, partNum, numParts, func(n int64) bool {
 			totalWritten += n
 			if cb != nil {
 				return cb(Progress{
@@ -160,7 +159,6 @@ func SplitWithProgress(
 		if err != nil {
 			return fmt.Errorf("failed to write part %d: %w", partNum, err)
 		}
-		_ = written
 	}
 
 	return nil
@@ -326,7 +324,7 @@ func writeSWMPart(
 		srcOffset := blob.stream.Offset
 		blobSize := blob.stream.CompressedSize()
 
-		copied, err := copyBlobData(ctx, srcFile, dstFile, srcOffset, blobSize, buf, func(n int64) bool {
+		_, err := copyBlobData(ctx, srcFile, dstFile, srcOffset, blobSize, buf, func(n int64) bool {
 			currentOffset += n
 			totalCopied += n
 			if onProgress != nil {
@@ -337,7 +335,6 @@ func writeSWMPart(
 		if err != nil {
 			return totalCopied, fmt.Errorf("failed to copy blob: %w", err)
 		}
-		_ = copied
 	}
 
 	// Write offset table for this part
@@ -498,4 +495,3 @@ func CopySWMs(ctx context.Context, swmDir string, usbRoot string, cb func(done, 
 	}
 	return nil
 }
-

@@ -14,9 +14,9 @@ import (
 // CopyFiles copies all files from the ISO to USB, skipping files > FAT32 limit.
 type CopyFiles struct{}
 
-func (CopyFiles) Key() string         { return "copying-files" }
-func (CopyFiles) Name() string        { return "Copying files" }
-func (CopyFiles) HasProgress() bool   { return true }
+func (CopyFiles) Key() string       { return "copying-files" }
+func (CopyFiles) Name() string      { return "Copying files" }
+func (CopyFiles) HasProgress() bool { return true }
 
 func (CopyFiles) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

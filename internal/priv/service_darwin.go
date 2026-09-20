@@ -3,10 +3,10 @@
 package priv
 
 import (
-	"github.com/kyleaupton/flashit/internal/logger"
-	macosclient "github.com/kyleaupton/flashit/internal/priv/macos"
 	"context"
 	"errors"
+	"github.com/kyleaupton/flashit/internal/logger"
+	macosclient "github.com/kyleaupton/flashit/internal/priv/macos"
 	"sync"
 )
 

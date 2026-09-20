@@ -14,9 +14,9 @@ import (
 // This step is only executed if NeedsSplit is true.
 type CopyWim struct{}
 
-func (CopyWim) Key() string         { return "copying-wim" }
-func (CopyWim) Name() string        { return "Copying split WIM files" }
-func (CopyWim) HasProgress() bool   { return true }
+func (CopyWim) Key() string       { return "copying-wim" }
+func (CopyWim) Name() string      { return "Copying split WIM files" }
+func (CopyWim) HasProgress() bool { return true }
 
 func (CopyWim) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {

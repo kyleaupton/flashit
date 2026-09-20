@@ -7,10 +7,6 @@ import { Call as $Call, CancellablePromise as $CancellablePromise, Create as $Cr
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
-import * as jobs$0 from "../jobs/models.js";
-
-// eslint-disable-next-line @typescript-eslint/ban-ts-comment
-// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 /**
@@ -27,21 +23,13 @@ export function ListInstallers(): $CancellablePromise<$models.InstallerMeta[]> {
     });
 }
 
-export function ListJobs(): $CancellablePromise<jobs$0.Job[]> {
-    return $Call.ByID(1465115179).then(($result: any) => {
-        return $$createType3($result);
-    });
-}
-
 export function StartJob(req: $models.StartJobRequest): $CancellablePromise<$models.StartJobResponse> {
     return $Call.ByID(2679174400, req).then(($result: any) => {
-        return $$createType4($result);
+        return $$createType2($result);
     });
 }
 
 // Private type creation functions
 const $$createType0 = $models.InstallerMeta.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = jobs$0.Job.createFrom;
-const $$createType3 = $Create.Array($$createType2);
-const $$createType4 = $models.StartJobResponse.createFrom;
+const $$createType2 = $models.StartJobResponse.createFrom;

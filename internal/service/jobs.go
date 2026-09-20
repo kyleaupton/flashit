@@ -1,13 +1,13 @@
 package service
 
 import (
+	"context"
+	"errors"
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/installers/linux"
 	"github.com/kyleaupton/flashit/internal/installers/windows"
 	"github.com/kyleaupton/flashit/internal/jobs"
-	"context"
-	"errors"
 	"os"
 )
 
@@ -85,8 +85,6 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 		StepInfos: plan.StepInfos,
 	}, nil
 }
-
-func (s *JobsService) ListJobs() []jobs.Job { return s.mgr.List() }
 
 // CancelJob cancels a running job by ID.
 // Returns true if the job was found and cancelled, false if not found or already completed.

@@ -3,7 +3,6 @@
 
 export {
     OSFamily,
-    Plan,
     StepInfo,
     Target
 } from "./models.js";

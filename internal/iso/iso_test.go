@@ -38,10 +38,10 @@ func createTestFile(t *testing.T, size int64, patches map[int64][]byte) string {
 func TestInspect_ValidHybridISO(t *testing.T) {
 	// Create a valid hybrid ISO: ISO 9660 signature + MBR boot signature
 	patches := map[int64][]byte{
-		pvdOffset:               {0x01},                                    // Volume descriptor type
-		iso9660SignatureOffset:  []byte("CD001"),                           // ISO 9660 signature
-		volumeLabelOffset:       []byte("UBUNTU 24.04                    "), // Volume label (32 bytes, space-padded)
-		mbrSignatureOffset:      {0x55, 0xAA},                              // MBR boot signature
+		pvdOffset:              {0x01},                                     // Volume descriptor type
+		iso9660SignatureOffset: []byte("CD001"),                            // ISO 9660 signature
+		volumeLabelOffset:      []byte("UBUNTU 24.04                    "), // Volume label (32 bytes, space-padded)
+		mbrSignatureOffset:     {0x55, 0xAA},                               // MBR boot signature
 	}
 	path := createTestFile(t, 40000, patches)
 

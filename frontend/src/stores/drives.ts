@@ -4,14 +4,12 @@ import { ListDrives } from '@flashit/service/drivesservice'
 import type { Drive } from '@/types'
 
 export const useDrivesStore = defineStore('drives', () => {
-  // State
   const drives = ref<Drive[]>([])
   const selectedDriveId = ref<string | null>(null)
   const isLoading = ref(false)
   const error = ref<string | null>(null)
   let refreshIntervalId: ReturnType<typeof setInterval> | null = null
 
-  // Getters
   const selectedDrive = computed(() =>
     drives.value.find((d) => d.Device === selectedDriveId.value) ?? null
   )
@@ -22,7 +20,6 @@ export const useDrivesStore = defineStore('drives', () => {
 
   const hasDrives = computed(() => removableDrives.value.length > 0)
 
-  // Actions
   async function fetchDrives(): Promise<void> {
     isLoading.value = true
     error.value = null
@@ -69,16 +66,13 @@ export const useDrivesStore = defineStore('drives', () => {
   }
 
   return {
-    // State
     drives,
     selectedDriveId,
     isLoading,
     error,
-    // Getters
     selectedDrive,
     removableDrives,
     hasDrives,
-    // Actions
     fetchDrives,
     selectDrive,
     startAutoRefresh,

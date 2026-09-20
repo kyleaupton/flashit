@@ -1,0 +1,109 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.25'
+  NODE_VERSION: '22'
+
+jobs:
+  go:
+    name: Go (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+
+      # main.go embeds frontend/dist, which is gitignored, so the Go steps
+      # below need it built first.
+      - name: Build frontend
+        run: npm ci && npm run build
+        working-directory: frontend
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test ./...
+
+      # Every real macOS build sets flashitxpc; without it the XPC client
+      # compiles as a stub and the cgo path is never checked.
+      - name: Vet and build with flashitxpc
+        if: runner.os == 'macOS'
+        run: |
+          go vet -tags flashitxpc ./...
+          go build -tags flashitxpc ./...
+
+      - name: Vet helper (linux)
+        run: GOOS=linux go vet ./...
+        working-directory: helpers/linux
+
+      - name: Build helper (linux)
+        run: GOOS=linux go build -o /dev/null ./...
+        working-directory: helpers/linux
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Type check
+        run: npm run type-check
+        working-directory: frontend

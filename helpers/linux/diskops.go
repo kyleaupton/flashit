@@ -15,7 +15,7 @@ import (
 
 const (
 	writeBufferSize  = 1024 * 1024      // 1MB write chunks
-	progressInterval = 10 * 1024 * 1024  // report progress every 10MB
+	progressInterval = 10 * 1024 * 1024 // report progress every 10MB
 )
 
 var cancelFlag atomic.Bool

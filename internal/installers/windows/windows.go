@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -17,12 +16,8 @@ import (
 	"github.com/kyleaupton/flashit/internal/priv"
 )
 
-const (
-	// FAT32 max file size is 4GB - 1 byte
-	fat32MaxFileSize = 4*1024*1024*1024 - 1
-	// Volume name for the USB drive (matches Microsoft's Media Creation Tool)
-	defaultVolumeName = "ESD-USB"
-)
+// defaultVolumeName matches Microsoft's Media Creation Tool.
+const defaultVolumeName = "ESD-USB"
 
 // Windows is an installer for Windows ISOs.
 // Windows ISOs are not hybrid images, so they cannot be written directly to USB.
@@ -35,24 +30,6 @@ func (w Windows) Name() string { return "Windows" }
 
 func (w Windows) Targets() []core.Target {
 	return []core.Target{{Family: core.OSWindows}}
-}
-
-func (w Windows) AllowedSources() core.SourceMode {
-	return core.SourceModeSupply
-}
-
-func (w Windows) ValidateHost(ctx context.Context, host core.HostInfo) core.Capability {
-	var reasons []string
-	if !iso.IsMountSupported() {
-		reasons = append(reasons, "ISO mounting not supported on this platform")
-	}
-	if !drives.IsSupported() {
-		reasons = append(reasons, "Drive operations not supported on this platform")
-	}
-	if len(reasons) > 0 {
-		return core.Capability{Supported: false, Reasons: reasons}
-	}
-	return core.Capability{Supported: true}
 }
 
 func (w Windows) Plan(ctx context.Context, req core.CreateRequest) (*core.Plan, error) {
@@ -77,16 +54,10 @@ func (w Windows) Plan(ctx context.Context, req core.CreateRequest) (*core.Plan, 
 		}
 	}
 
-	// Determine volume name from options or use default
-	volumeName := defaultVolumeName
-	if name, ok := req.Options["volumeName"].(string); ok && name != "" {
-		volumeName = name
-	}
-
 	state := &winsteps.FlashContext{
 		ISOPath:    req.Source.Local,
 		TargetDisk: req.DriveID,
-		VolumeName: volumeName,
+		VolumeName: defaultVolumeName,
 	}
 
 	// Skip validation and privileged service in dry-run mode
@@ -150,33 +121,4 @@ func (w Windows) Plan(ctx context.Context, req core.CreateRequest) (*core.Plan, 
 		Runnable:  runnable,
 		StepInfos: runnable.StepInfos(),
 	}, nil
-}
-
-// wimNeedsSplit checks if a WIM file exceeds the FAT32 file size limit.
-// This is exported for use by steps if needed.
-func WimNeedsSplit(wimPath string) (bool, int64, error) {
-	info, err := os.Stat(wimPath)
-	if err != nil {
-		return false, 0, err
-	}
-	return info.Size() > fat32MaxFileSize, info.Size(), nil
-}
-
-// findInstallWim locates the install.wim file in a mounted Windows ISO.
-// Returns the path to install.wim or an error if not found.
-func FindInstallWim(mountPoint string) (string, error) {
-	// Windows ISOs typically have install.wim in sources/
-	candidates := []string{
-		filepath.Join(mountPoint, "sources", "install.wim"),
-		filepath.Join(mountPoint, "Sources", "install.wim"),
-		filepath.Join(mountPoint, "SOURCES", "install.wim"),
-	}
-
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
-		}
-	}
-
-	return "", errors.New("install.wim not found in ISO")
 }
