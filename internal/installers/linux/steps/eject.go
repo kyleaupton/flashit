@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/core"
-	"github.com/kyleaupton/flashit/internal/drives"
 	"github.com/kyleaupton/flashit/internal/pipeline"
 )
 
@@ -23,7 +22,7 @@ func (Eject) Run(ctx context.Context, state *FlashContext, e core.Executor) erro
 
 	e.Emit(core.Event{Type: "log", Message: "Ejecting disk..."})
 
-	if err := drives.Eject(ctx, state.TargetDisk); err != nil {
+	if err := state.PrivService.Disk().Eject(ctx, state.TargetDisk); err != nil {
 		// Eject failure is not fatal - just log it
 		e.Emit(core.Event{Type: "log", Message: "Warning: eject failed: " + err.Error()})
 		return nil
