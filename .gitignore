@@ -13,3 +13,4 @@ wimlib*/
 wimlib-*
 *.dmg
 .DS_Store
+docs/
