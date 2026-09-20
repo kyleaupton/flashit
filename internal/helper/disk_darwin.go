@@ -30,13 +30,14 @@ const diskutilPath = "/usr/sbin/diskutil"
 var wholeDiskRe = regexp.MustCompile(`^/dev/disk[0-9]+$`)
 
 type darwinDisk struct {
-	du  diskutil
-	log *slog.Logger
+	du       diskutil
+	log      *slog.Logger
+	authopen string
 }
 
 // NewDisk returns the diskutil-backed Disk.
 func NewDisk(log *slog.Logger) (Disk, error) {
-	d := &darwinDisk{log: log}
+	d := &darwinDisk{log: log, authopen: authopenPath}
 	d.du = diskutil{run: func(ctx context.Context, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, diskutilPath, args...).Output()
 	}}
@@ -116,15 +117,25 @@ func (d *darwinDisk) diskutilUnmount(ctx context.Context, verb, target string) e
 	return fmt.Errorf("%w: %v", syscall.EBUSY, err)
 }
 
-// OpenRaw claims the disk through Disk Arbitration, so nothing remounts it
-// while it is written, then opens the character node, which bypasses the
-// buffer cache. The claim is released when the device is closed.
-func (d *darwinDisk) OpenRaw(device string) (RawDevice, error) {
+// rawDevicePath is the character node of a validated whole disk, the only
+// path ever handed to authopen. It bypasses the buffer cache.
+func rawDevicePath(info DeviceInfo) string {
+	return "/dev/r" + filepath.Base(info.Path)
+}
+
+// OpenRaw claims the disk through Disk Arbitration, so nothing remounts or
+// re-probes it while it is written, then has authopen open the character
+// node with the grant's credential. The claim is released when the device
+// is closed.
+func (d *darwinDisk) OpenRaw(device string, grant Grant) (RawDevice, error) {
+	g, ok := grant.(*authzGrant)
+	if !ok || g.device != device {
+		return nil, fmt.Errorf("no authorization grant for %s", device)
+	}
 	if !wholeDiskRe.MatchString(device) {
 		return nil, fmt.Errorf("%s is not a whole disk", device)
 	}
-	bsd := filepath.Base(device)
-	cbsd := C.CString(bsd)
+	cbsd := C.CString(filepath.Base(device))
 	defer C.free(unsafe.Pointer(cbsd))
 	var (
 		claim  *C.flashit_da_handle
@@ -133,12 +144,14 @@ func (d *darwinDisk) OpenRaw(device string) (RawDevice, error) {
 	if rc := C.flashit_da_claim(cbsd, &claim, &errbuf[0], C.size_t(len(errbuf))); rc != 0 {
 		return nil, fmt.Errorf("%w: %s", syscall.EBUSY, C.GoString(&errbuf[0]))
 	}
-	f, err := os.OpenFile("/dev/r"+bsd, os.O_WRONLY|unix.O_EXCL, 0)
+	// Only readwrite. has a rule in the authorization database, so the open
+	// is O_RDWR even though nothing is read.
+	f, err := authopen(d.authopen, g.raw, unix.O_RDWR, g.form[:])
 	if err != nil {
 		C.flashit_da_unclaim(claim)
 		return nil, err
 	}
-	d.log.Info("claimed and opened", "device", device, "raw", f.Name())
+	d.log.Info("claimed and opened", "device", device, "raw", g.raw)
 	return &rawDisk{File: f, claim: claim}, nil
 }
 

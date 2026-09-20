@@ -156,7 +156,7 @@ func (d *linuxDisk) Unmount(path string) error {
 	return nil
 }
 
-func (d *linuxDisk) OpenRaw(device string) (RawDevice, error) {
+func (d *linuxDisk) OpenRaw(device string, _ Grant) (RawDevice, error) {
 	f, err := os.OpenFile(device, os.O_WRONLY|unix.O_EXCL, 0)
 	if err != nil {
 		return nil, err

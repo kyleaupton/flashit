@@ -7,16 +7,9 @@ import (
 	"fmt"
 )
 
-// The macOS daemon's launchd label and the socket it serves; the launchd
-// plist and the darwin Taskfile carry the same literals.
-const (
-	DarwinHelperLabel = "dev.kyleupton.flashit.helper"
-	DarwinSocketPath  = "/var/run/dev.kyleupton.flashit.sock"
-)
-
 // ProtocolVersion is sent by the client in ping and checked by the helper.
 // Bump it whenever a request or response shape changes incompatibly.
-const ProtocolVersion = 3
+const ProtocolVersion = 4
 
 type Op string
 
@@ -52,6 +45,7 @@ const (
 	CodeInvalidLabel         ErrorCode = "invalid_label"
 	CodeCancelled            ErrorCode = "cancelled"
 	CodeUnauthorized         ErrorCode = "unauthorized"
+	CodeTCCDenied            ErrorCode = "tcc_denied" // macOS: the user refused Removable Volumes
 	CodeInternal             ErrorCode = "internal"
 )
 
@@ -87,9 +81,10 @@ type PingResult struct {
 // WriteImageParams names the target; the image itself travels as an open
 // file descriptor passed with the request line over the unix socket
 // (SCM_RIGHTS), so the helper reads exactly the file the app opened and
-// never opens a path as root. Size is what the app measured and the helper
+// never opens a path by itself. Size is what the app measured and the helper
 // checks. Authorization, on macOS, is the base64 external form of an
-// AuthorizationRef the helper redeems for the write right; Linux ignores it.
+// AuthorizationRef the helper redeems for Apple's right on the raw device
+// and hands to authopen; Linux ignores it.
 type WriteImageParams struct {
 	Device        string `json:"device"`
 	Size          int64  `json:"size"`

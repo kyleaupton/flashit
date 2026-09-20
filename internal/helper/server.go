@@ -61,17 +61,6 @@ func New(disk Disk, auth Auth, opts Options) *Server {
 // connection arriving while one is served is answered with busy and closed.
 // It returns ErrIdle when nobody connects or the client goes quiet.
 func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, ln, false)
-}
-
-// ServeForever is Serve for a daemon that outlives its clients: sessions are
-// served one after another and an idle client only ends its own session. It
-// returns when ctx ends or the listener fails.
-func (s *Server) ServeForever(ctx context.Context, ln net.Listener) error {
-	return s.serve(ctx, ln, true)
-}
-
-func (s *Server) serve(ctx context.Context, ln net.Listener, forever bool) error {
 	conns := make(chan net.Conn)
 	acceptErr := make(chan error, 1)
 	done := make(chan struct{})
@@ -93,12 +82,9 @@ func (s *Server) serve(ctx context.Context, ln net.Listener, forever bool) error
 		}
 	}()
 
-	var idle <-chan time.Time
-	if !forever {
-		t := time.NewTimer(s.opts.IdleTimeout)
-		defer t.Stop()
-		idle = t.C
-	}
+	t := time.NewTimer(s.opts.IdleTimeout)
+	defer t.Stop()
+	idle := t.C
 
 	// active carries the running session's result; nil means no session.
 	var active chan error
@@ -114,20 +100,8 @@ func (s *Server) serve(ctx context.Context, ln net.Listener, forever bool) error
 		case <-idle:
 			return ErrIdle
 		case err := <-active:
-			active = nil
-			if !forever {
-				return err
-			}
-			s.sessionEnded(err)
+			return err
 		case c := <-conns:
-			if active != nil {
-				select {
-				case err := <-active:
-					active = nil
-					s.sessionEnded(err)
-				default:
-				}
-			}
 			if active != nil {
 				s.opts.Logger.Warn("refused second connection")
 				s.refuse(c, proto.NewError(proto.CodeBusy, "helper already has a client"))
@@ -147,21 +121,14 @@ func (s *Server) serve(ctx context.Context, ln net.Listener, forever bool) error
 	}
 }
 
-func (s *Server) sessionEnded(err error) {
-	if err != nil && !errors.Is(err, ErrIdle) && !errors.Is(err, context.Canceled) {
-		s.opts.Logger.Warn("session ended", "error", err)
-		return
-	}
-	s.opts.Logger.Info("client disconnected")
-}
-
 func (s *Server) refuse(c net.Conn, err *proto.Error) {
 	_ = c.SetWriteDeadline(time.Now().Add(time.Second))
 	_ = writeLine(c, proto.ErrorResponse("", err))
 	c.Close()
 }
 
-// ServeConn serves an already authenticated connection on behalf of peer.
+// ServeConn serves an already authenticated connection on behalf of peer;
+// the Auth is not consulted.
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn, peer Peer) error {
 	sess := &session{s: s, conn: conn, peer: peer}
 	return sess.serve(ctx)

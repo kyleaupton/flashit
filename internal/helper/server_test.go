@@ -970,68 +970,88 @@ func TestAuthorizerGatesDestructiveOps(t *testing.T) {
 		if len(az.Calls) != 1 || az.Calls[0] != proto.OpFormatDisk {
 			t.Fatalf("authorizer calls %v, want only format_disk", az.Calls)
 		}
+		if len(az.Grants) != 1 || !az.Grants[0].WasReleased() {
+			t.Fatal("format_disk did not release its grant")
+		}
+	})
+
+	t.Run("refusal codes pass through", func(t *testing.T) {
+		for _, tc := range []struct {
+			err  error
+			want proto.ErrorCode
+		}{
+			{proto.NewError(proto.CodeTCCDenied, "removable volumes refused"), proto.CodeTCCDenied},
+			{proto.NewError(proto.CodeCancelled, "sheet cancelled"), proto.CodeCancelled},
+			{errors.New("OSStatus -60008"), proto.CodeUnauthorized},
+		} {
+			disk := helpertest.NewFakeDisk()
+			opts := testOptions()
+			opts.Authorizer = &helpertest.FakeAuthorizer{Token: "good", Err: tc.err}
+			c := serve(t, disk, opts)
+			c.ping()
+			_, resp := c.callFile("1", proto.OpWriteImage, write("good"), openSource(t, size))
+			wantError(t, resp, tc.want)
+			if tc.want == proto.CodeUnauthorized && strings.Contains(resp.Message, "60008") {
+				t.Fatalf("message leaks the reason: %q", resp.Message)
+			}
+			if len(disk.OpenRawGrants) != 0 || len(disk.Unmounted) != 0 {
+				t.Fatal("refused op touched the disk")
+			}
+		}
 	})
 }
 
-func TestServeForeverServesClientsInTurn(t *testing.T) {
-	ln := helpertest.NewPipeListener()
-	defer ln.Close()
-	opts := testOptions()
-	opts.IdleTimeout = 100 * time.Millisecond
-	srv := helper.New(helpertest.NewFakeDisk(), helpertest.FakeAuth{}, opts)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- srv.ServeForever(ctx, ln) }()
-
-	// Nobody connects for longer than the idle timeout; the daemon stays up.
-	time.Sleep(3 * opts.IdleTimeout)
-	select {
-	case err := <-done:
-		t.Fatalf("ServeForever exited without a client: %v", err)
-	default:
+// The grant Authorize returns is what OpenRaw receives, for the device that
+// was resolved, and it is released as soon as OpenRaw has returned, whether
+// the open, the unmount before it or the write after it failed.
+func TestGrantLifetime(t *testing.T) {
+	const size = 4096
+	params := proto.WriteImageParams{Device: helpertest.RemovableLink, Size: size, Authorization: "good"}
+	cases := []struct {
+		name     string
+		setup    func(d *helpertest.FakeDisk)
+		want     proto.ErrorCode
+		openRaws int
+	}{
+		{"write succeeds", nil, "", 1},
+		{"open fails", func(d *helpertest.FakeDisk) { d.OpenRawErr = errors.New("EIO") }, proto.CodeInternal, 1},
+		{"open reports a code", func(d *helpertest.FakeDisk) { d.OpenRawErr = proto.NewError(proto.CodeTCCDenied, "denied late") }, proto.CodeTCCDenied, 1},
+		{"unmount fails", func(d *helpertest.FakeDisk) {
+			d.UnmountErr = map[string]error{helpertest.Removable + "1": syscall.EBUSY}
+		}, proto.CodeDeviceBusy, 0},
+		{"write fails", func(d *helpertest.FakeDisk) { d.Raw = &helpertest.FakeRaw{WriteErr: errors.New("EIO")} }, proto.CodeInternal, 1},
 	}
-
-	dial := func() *client {
-		c := &client{t: t, conn: ln.Dial()}
-		c.r = bufio.NewReader(c.conn)
-		_ = c.conn.SetDeadline(time.Now().Add(testTimeout))
-		return c
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			disk := helpertest.NewFakeDisk()
+			if tc.setup != nil {
+				tc.setup(disk)
+			}
+			az := &helpertest.FakeAuthorizer{Token: "good"}
+			opts := testOptions()
+			opts.Authorizer = az
+			c := serve(t, disk, opts)
+			c.ping()
+			_, resp := c.callFile("1", proto.OpWriteImage, params, openSource(t, size))
+			if tc.want == "" {
+				wantResult(t, resp)
+			} else {
+				wantError(t, resp, tc.want)
+			}
+			if len(az.Devices) != 1 || az.Devices[0] != helpertest.Removable {
+				t.Fatalf("authorizer saw devices %v, want the resolved %s", az.Devices, helpertest.Removable)
+			}
+			if len(disk.OpenRawGrants) != tc.openRaws {
+				t.Fatalf("OpenRaw called %d times, want %d", len(disk.OpenRawGrants), tc.openRaws)
+			}
+			if tc.openRaws == 1 && disk.OpenRawGrants[0] != az.Grants[0] {
+				t.Fatal("OpenRaw did not receive the grant Authorize returned")
+			}
+			if !az.Grants[0].WasReleased() {
+				t.Fatal("grant was not released")
+			}
+		})
 	}
-
-	first := dial()
-	first.ping()
-	second := dial()
-	line, err := second.r.ReadBytes('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	var resp proto.Response
-	_ = json.Unmarshal(line, &resp)
-	wantError(t, resp, proto.CodeBusy)
-
-	// An idle client loses its session and the next one is served.
-	time.Sleep(3 * opts.IdleTimeout)
-	first.expectClosed()
-	third := dial()
-	third.ping()
-	third.conn.Close()
-	// Teardown of a closed session is asynchronous; a dial that lands in
-	// that window is answered busy, which is the client's problem to retry.
-	time.Sleep(50 * time.Millisecond)
-
-	fourth := dial()
-	fourth.ping()
-
-	cancel()
-	select {
-	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("ServeForever returned %v", err)
-		}
-	case <-time.After(testTimeout):
-		t.Fatal("ServeForever ignored context cancellation")
-	}
-	fourth.expectClosed()
 }
 
 // A cancel that arrives while the sheet is up must win over the answer,
@@ -1060,6 +1080,9 @@ func TestCancelDuringAuthorization(t *testing.T) {
 		wantError(t, resp, proto.CodeCancelled)
 		if len(disk.Unmounted) != 0 || len(disk.Formats) != 0 {
 			t.Fatalf("approve=%v: cancelled op touched the disk: unmounted=%v formats=%v", approve, disk.Unmounted, disk.Formats)
+		}
+		if approve && (len(az.Grants) != 1 || !az.Grants[0].WasReleased()) {
+			t.Fatalf("grant of a cancelled op was not released: %+v", az.Grants)
 		}
 		c.ping()
 	}

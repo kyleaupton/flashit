@@ -1,6 +1,7 @@
-// Package helper is the root-side server: NDJSON over one connection, one op
-// at a time, every op validated before the OS is touched. The OS sits behind
-// Disk and Auth so the whole package tests on any platform with fakes.
+// Package helper is the privileged side of FlashIt: NDJSON over one
+// connection, one op at a time, every op validated before the OS is touched.
+// The OS sits behind Disk, Auth and Authorizer so the whole package tests on
+// any platform with fakes.
 package helper
 
 import (
@@ -37,9 +38,11 @@ type Disk interface {
 	// and unmounts everything mounted from or at it. It returns
 	// syscall.EBUSY when something holds the mount.
 	Unmount(path string) error
-	// OpenRaw opens the device O_WRONLY|O_EXCL. It returns syscall.EBUSY
-	// when the kernel still has the device claimed.
-	OpenRaw(device string) (RawDevice, error)
+	// OpenRaw opens the device for exclusive raw writing. grant is what the
+	// Authorizer returned for this device; a host that needs no per-op
+	// authorization gets NopGrant. It returns syscall.EBUSY when something
+	// else holds the device.
+	OpenRaw(device string, grant Grant) (RawDevice, error)
 	// Format writes an MBR with one active fat32 partition, formats it with
 	// label, mounts it under validate.MountRoot and returns the mountpoint.
 	Format(ctx context.Context, device, fs, label string) (string, error)
@@ -57,19 +60,29 @@ type Auth interface {
 	Authenticate(conn net.Conn) (Peer, error)
 }
 
-// Authorizer decides whether the user approved a destructive op. token is
-// the request's authorization field, verbatim; the authorizer is free to
-// prompt. It runs after every other check has passed so a refused request
-// never costs the user a prompt.
+// Authorizer decides whether the user approved a destructive op on device.
+// token is the request's authorization field, verbatim; the authorizer is
+// free to prompt. It runs after every other check has passed so a refused
+// request never costs the user a prompt. A *proto.Error reaches the client
+// with its code; any other error is reported as unauthorized.
 type Authorizer interface {
-	Authorize(op proto.Op, token string) error
+	Authorize(op proto.Op, token string, device DeviceInfo) (Grant, error)
 }
+
+// Grant is the approval an Authorizer hands back, and on macOS the
+// authorized ref the raw open is made with. Release runs the moment the
+// privileged step has returned, success or failure.
+type Grant interface {
+	Release()
+}
+
+// NopGrant is the Grant of a host whose user authorization happened before
+// the helper started (polkit, UAC).
+type NopGrant struct{}
+
+func (NopGrant) Release() {}
 
 var (
 	ErrUnauthorized = errors.New("helper: caller is not authorized")
 	ErrIdle         = errors.New("helper: idle timeout")
-	// ErrConfig marks a failure that a restart will not fix: the build or
-	// the host is wrong. The daemon exits cleanly on it so launchd does not
-	// spin it.
-	ErrConfig = errors.New("helper: configuration error")
 )

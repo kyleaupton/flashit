@@ -14,11 +14,10 @@ import (
 	"github.com/kyleaupton/flashit/internal/helper"
 )
 
-// The app picks a private socket directory per session, so there is no
-// default on Linux.
-const defaultSocket = ""
-
 func serve(ctx context.Context, socket string, idle time.Duration, log *slog.Logger) error {
+	if os.Geteuid() != 0 {
+		return fmt.Errorf("must run as root, euid is %d", os.Geteuid())
+	}
 	if socket == "" {
 		return errors.New("-socket is required (inside a 0700 directory owned by the caller)")
 	}
@@ -43,16 +42,7 @@ func serve(ctx context.Context, socket string, idle time.Duration, log *slog.Log
 
 	log.Info("listening", "socket", socket, "caller_uid", uid, "idle", idle)
 	srv := helper.New(disk, auth, helper.Options{Version: Version, IdleTimeout: idle, Logger: log})
-	err = srv.Serve(ctx, ln)
-	switch {
-	case errors.Is(err, helper.ErrIdle):
-		log.Info("idle, exiting")
-		return nil
-	case errors.Is(err, context.Canceled):
-		log.Info("signalled, exiting")
-		return nil
-	}
-	return err
+	return srv.Serve(ctx, ln)
 }
 
 // callerUID is the user pkexec elevated for. Without it there is nobody to

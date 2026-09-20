@@ -68,29 +68,60 @@ func (sess *session) resolveTarget(op proto.Op, requested string) (DeviceInfo, e
 	return info, nil
 }
 
-// authorize asks the host's Authorizer, if any, whether the user approved op.
-// Any failure is reported as unauthorized; the reason stays in the log. The
-// authorizer may block on a sheet it cannot abandon, so a cancel that
-// arrived meanwhile wins over an approval, and nothing is unmounted for it.
-func (sess *session) authorize(ctx context.Context, op proto.Op, token string) error {
+// authorize asks the host's Authorizer, if any, whether the user approved op
+// on the resolved device. A refusal with a protocol code (cancelled,
+// tcc_denied) is passed on; anything else is reported as unauthorized and the
+// reason stays in the log. The authorizer may block on a sheet it cannot
+// abandon, so a cancel that arrived meanwhile wins over an approval, and
+// nothing is unmounted for it.
+func (sess *session) authorize(ctx context.Context, op proto.Op, token string, device DeviceInfo) (Grant, error) {
 	if err := ctx.Err(); err != nil {
-		return err
+		return nil, err
 	}
 	az := sess.s.opts.Authorizer
 	if az == nil {
-		return nil
+		return NopGrant{}, nil
 	}
-	err := az.Authorize(op, token)
+	grant, err := az.Authorize(op, token, device)
 	if ctxErr := ctx.Err(); ctxErr != nil {
+		if grant != nil {
+			grant.Release()
+		}
 		sess.s.opts.Logger.Info("cancelled while authorizing", "op", op)
-		return ctxErr
+		return nil, ctxErr
 	}
 	if err != nil {
 		sess.s.opts.Logger.Warn("user authorization refused", "op", op, "uid", sess.peer.UID, "error", err)
-		return proto.Errorf(proto.CodeUnauthorized, "%s was not authorized by the user", op)
+		var pe *proto.Error
+		if errors.As(err, &pe) {
+			return nil, pe
+		}
+		return nil, proto.Errorf(proto.CodeUnauthorized, "%s was not authorized by the user", op)
 	}
 	sess.s.opts.Logger.Info("user authorized", "op", op, "uid", sess.peer.UID)
-	return nil
+	return grant, nil
+}
+
+// openTarget unmounts the device and opens it raw. The grant is released as
+// soon as OpenRaw has returned, whatever the outcome: on macOS it is a bearer
+// credential for a root open of any path until then.
+func (sess *session) openTarget(info DeviceInfo, grant Grant) (RawDevice, error) {
+	defer grant.Release()
+	if err := sess.unmountAll(info); err != nil {
+		return nil, err
+	}
+	dst, err := sess.s.disk.OpenRaw(info.Path, grant)
+	if err != nil {
+		var pe *proto.Error
+		switch {
+		case errors.As(err, &pe):
+			return nil, pe
+		case errors.Is(err, syscall.EBUSY):
+			return nil, proto.Errorf(proto.CodeDeviceBusy, "%s is in use: %v", info.Path, err)
+		}
+		return nil, proto.Errorf(proto.CodeInternal, "open %s: %v", info.Path, err)
+	}
+	return dst, nil
 }
 
 func (sess *session) unmountAll(info DeviceInfo) error {
@@ -127,21 +158,13 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 	if err := validate.Capacity(p.Size, info); err != nil {
 		return err
 	}
-	if err := sess.authorize(ctx, proto.OpWriteImage, p.Authorization); err != nil {
-		return err
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err := sess.unmountAll(info); err != nil {
-		return err
-	}
-	dst, err := sess.s.disk.OpenRaw(info.Path)
+	grant, err := sess.authorize(ctx, proto.OpWriteImage, p.Authorization, info)
 	if err != nil {
-		if errors.Is(err, syscall.EBUSY) {
-			return proto.Errorf(proto.CodeDeviceBusy, "%s is in use: %v", info.Path, err)
-		}
-		return proto.Errorf(proto.CodeInternal, "open %s: %v", info.Path, err)
+		return err
+	}
+	dst, err := sess.openTarget(info, grant)
+	if err != nil {
+		return err
 	}
 
 	sess.s.opts.Logger.Info("writing image", "device", info.Path, "bytes", p.Size)
@@ -212,12 +235,13 @@ func (sess *session) formatDisk(ctx context.Context, p proto.FormatDiskParams) (
 	if err := validate.Label(p.Label); err != nil {
 		return nil, err
 	}
-	if err := sess.authorize(ctx, proto.OpFormatDisk, p.Authorization); err != nil {
+	// Wiping a disk gets the same gate as writing one; the format itself
+	// needs nothing from the grant, so it is released at once.
+	grant, err := sess.authorize(ctx, proto.OpFormatDisk, p.Authorization, info)
+	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
+	grant.Release()
 	if err := sess.unmountAll(info); err != nil {
 		return nil, err
 	}

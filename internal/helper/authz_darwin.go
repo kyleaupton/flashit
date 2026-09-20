@@ -3,88 +3,132 @@
 package helper
 
 /*
+#cgo CFLAGS: -mmacosx-version-min=13.0
+#cgo LDFLAGS: -framework Security -framework CoreFoundation -framework DiskArbitration
 #include <stdlib.h>
-#include "peer_darwin.h"
+#include "authz_darwin.h"
 */
 import "C"
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"unsafe"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 const (
-	writePrompt        = "FlashIt needs to write to a removable drive."
 	externalFormLength = 32
+	// Apple's right authopen checks for a read-write open; the suffix is the
+	// path. Every such right shares one rule, so the credential the sheet
+	// puts in the ref is not bound to the device (decision 006).
+	rightPrefix = "sys.openfile.readwrite."
+)
+
+// Authorization Services OSStatus values.
+const (
+	errAuthorizationDenied                = -60005
+	errAuthorizationCanceled              = -60006
+	errAuthorizationInteractionNotAllowed = -60007
 )
 
 type authz struct {
-	right *C.char
+	log   *slog.Logger
+	probe func(raw string) error
 }
 
-// NewAuthorizer writes the rule for WriteRight on every start (root passes
-// config.modify without a sheet) and reads it back to check that authd holds
-// what was written. Anyone can create a right that does not exist yet, so a
-// rule that is merely present is not trusted; the same check runs again
-// before every use.
-func NewAuthorizer(log *slog.Logger) (Authorizer, error) {
-	cright := C.CString(WriteRight)
-	cprompt := C.CString(writePrompt)
-	var errbuf [256]C.char
-	st := C.flashit_authz_right_create(cright, cprompt, writeRightTimeout, &errbuf[0], C.size_t(len(errbuf)))
-	C.free(unsafe.Pointer(cprompt))
-	if st != 0 {
-		C.free(unsafe.Pointer(cright))
-		return nil, fmt.Errorf("%w: set right %s: %s", ErrConfig, WriteRight, C.GoString(&errbuf[0]))
-	}
-	a := authz{right: cright}
-	if err := a.verifyRule(); err != nil {
-		C.free(unsafe.Pointer(cright))
-		return nil, fmt.Errorf("%w: %v", ErrConfig, err)
-	}
-	log.Info("authorization right in place", "right", WriteRight)
-	return a, nil
+// NewAuthorizer returns the Authorizer that redeems the app's ref for Apple's
+// right on the raw device, raising the password sheet named after the app.
+func NewAuthorizer(log *slog.Logger) Authorizer {
+	return authz{log: log, probe: probeRemovableVolumes}
 }
 
-func (a authz) verifyRule() error {
-	var r C.flashit_authz_rule
-	if st := C.flashit_authz_right_read(a.right, &r); st != 0 {
-		return fmt.Errorf("read right %s: OSStatus %d", WriteRight, int(st))
-	}
-	rule := rightRule{
-		Class:            C.GoString(&r.class_[0]),
-		Group:            C.GoString(&r.group[0]),
-		AuthenticateUser: int(r.authenticate_user),
-		AllowRoot:        int(r.allow_root),
-		Shared:           int(r.shared),
-		Timeout:          int64(r.timeout),
-	}
-	if err := checkRightRule(rule); err != nil {
-		return fmt.Errorf("right %s: %w", WriteRight, err)
-	}
-	return nil
-}
-
-func (a authz) Authorize(op proto.Op, token string) error {
+func (a authz) Authorize(op proto.Op, token string, device DeviceInfo) (Grant, error) {
 	if token == "" {
-		return fmt.Errorf("%s carries no authorization", op)
+		return nil, fmt.Errorf("%s carries no authorization", op)
 	}
 	ext, err := base64.StdEncoding.DecodeString(token)
 	if err != nil {
-		return fmt.Errorf("authorization is not base64: %v", err)
+		return nil, fmt.Errorf("authorization is not base64: %v", err)
 	}
 	if len(ext) != externalFormLength {
-		return fmt.Errorf("authorization is %d bytes, not %d", len(ext), externalFormLength)
+		return nil, fmt.Errorf("authorization is %d bytes, not %d", len(ext), externalFormLength)
 	}
-	if err := a.verifyRule(); err != nil {
-		return err
+	raw := rawDevicePath(device)
+	if err := a.probe(raw); err != nil {
+		return nil, err
 	}
-	if st := C.flashit_authz_check((*C.uchar)(unsafe.Pointer(&ext[0])), a.right); st != 0 {
-		return fmt.Errorf("AuthorizationCopyRights(%s): %d", WriteRight, int(st))
+
+	g := &authzGrant{raw: raw, device: device.Path}
+	if st := C.flashit_authz_from_external((*C.uchar)(unsafe.Pointer(&ext[0])), &g.ref); st != 0 {
+		return nil, fmt.Errorf("AuthorizationCreateFromExternalForm: %d", int(st))
 	}
-	return nil
+	right := rightPrefix + raw
+	cright := C.CString(right)
+	st := C.flashit_authz_copy_rights(g.ref, cright)
+	C.free(unsafe.Pointer(cright))
+	switch st {
+	case 0:
+	case errAuthorizationCanceled:
+		g.Release()
+		return nil, proto.Errorf(proto.CodeCancelled, "%s was cancelled at the authorization sheet", op)
+	case errAuthorizationDenied, errAuthorizationInteractionNotAllowed:
+		g.Release()
+		return nil, proto.Errorf(proto.CodeUnauthorized, "%s was not authorized by the user", op)
+	default:
+		g.Release()
+		return nil, fmt.Errorf("AuthorizationCopyRights(%s): %d", right, int(st))
+	}
+	if st := C.flashit_authz_external(g.ref, (*C.uchar)(unsafe.Pointer(&g.form[0]))); st != 0 {
+		g.Release()
+		return nil, fmt.Errorf("AuthorizationMakeExternalForm: %d", int(st))
+	}
+	a.log.Info("right granted", "right", right)
+	return g, nil
+}
+
+// authzGrant is the authorized ref and the external form authopen reads
+// from its stdin. Until Release the form opens any root-only path
+// read-write, so it never leaves this process and is destroyed, not merely
+// freed, as soon as the descriptor is in hand.
+type authzGrant struct {
+	ref    C.AuthorizationRef
+	form   [externalFormLength]byte
+	raw    string
+	device string
+}
+
+func (g *authzGrant) Release() {
+	if g.ref != nil {
+		C.flashit_authz_destroy(g.ref)
+		g.ref = nil
+	}
+	g.form = [externalFormLength]byte{}
+}
+
+// probeRemovableVolumes tells a user who clicked Don't Allow on the Removable
+// Volumes prompt apart from the normal state before any sheet is raised. The
+// node is root:operator, so an allowed app gets EACCES from the kernel;
+// a denied one gets EPERM from the sandbox.
+func probeRemovableVolumes(raw string) error {
+	fd, err := unix.Open(raw, unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	if err == nil {
+		unix.Close(fd)
+	}
+	return tccProbeResult(raw, err)
+}
+
+func tccProbeResult(raw string, err error) error {
+	switch {
+	case err == nil, errors.Is(err, unix.EACCES):
+		return nil
+	case errors.Is(err, unix.EPERM):
+		return proto.Errorf(proto.CodeTCCDenied, "FlashIt was denied access to removable volumes (%s)", raw)
+	}
+	return proto.Errorf(proto.CodeInternal, "probe %s: %v", raw, err)
 }

@@ -7,52 +7,32 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"os"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/helper"
-	"github.com/kyleaupton/flashit/internal/proto"
 )
 
-const defaultSocket = proto.DarwinSocketPath
-
-// The client code requirement arrives as plain values via -ldflags -X: the
-// app's bundle identifier plus either the SHA-1 of the signing certificate
-// (dev builds, self-signed) or the Apple team ID (Developer ID builds).
-var (
-	AppIdentifier = ""
-	LeafSHA1      = ""
-	TeamID        = ""
-)
-
-func serve(ctx context.Context, socket string, idle time.Duration, log *slog.Logger) error {
-	requirement, err := helper.Requirement(AppIdentifier, LeafSHA1, TeamID)
+// serve takes the socketpair end the app placed on fd 3 and serves that one
+// session; there is no listener and nothing else can connect.
+func serve(ctx context.Context, _ string, idle time.Duration, log *slog.Logger) error {
+	f := os.NewFile(3, "app")
+	conn, err := net.FileConn(f)
+	f.Close()
 	if err != nil {
-		return fmt.Errorf("%w: client code requirement: %v", helper.ErrConfig, err)
+		return fmt.Errorf("fd 3 is not a socket; refusing to serve: %w", err)
 	}
-	auth, err := helper.NewAuth(requirement)
-	if err != nil {
-		return fmt.Errorf("%w: %v", helper.ErrConfig, err)
+	uc, ok := conn.(*net.UnixConn)
+	if !ok {
+		conn.Close()
+		return errors.New("fd 3 is not a unix socket; refusing to serve")
 	}
 	disk, err := helper.NewDisk(log)
 	if err != nil {
 		return err
 	}
-	authz, err := helper.NewAuthorizer(log)
-	if err != nil {
-		return err
-	}
-	ln, err := helper.Listen(socket)
-	if err != nil {
-		return fmt.Errorf("listen: %w", err)
-	}
-	defer ln.Close()
-
-	log.Info("listening", "socket", socket, "requirement", requirement, "idle", idle)
-	srv := helper.New(disk, auth, helper.Options{Version: Version, IdleTimeout: idle, Logger: log, Authorizer: authz})
-	err = srv.ServeForever(ctx, ln)
-	if errors.Is(err, context.Canceled) {
-		log.Info("signalled, exiting")
-		return nil
-	}
-	return err
+	log.Info("serving", "uid", os.Getuid(), "idle", idle)
+	srv := helper.New(disk, nil, helper.Options{Version: Version, IdleTimeout: idle, Logger: log, Authorizer: helper.NewAuthorizer(log)})
+	return srv.ServeConn(ctx, uc, helper.Peer{UID: os.Getuid()})
 }

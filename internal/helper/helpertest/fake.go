@@ -44,6 +44,8 @@ type FakeDisk struct {
 	Unmounted     []string
 	OpenRawErr    error
 	Raw           *FakeRaw
+	// OpenRawGrants records the grant passed to every OpenRaw call.
+	OpenRawGrants []helper.Grant
 	FormatErr     error
 	Mountpoint    string
 	Formats       []FormatCall
@@ -103,9 +105,10 @@ func (d *FakeDisk) Unmount(path string) error {
 	return nil
 }
 
-func (d *FakeDisk) OpenRaw(device string) (helper.RawDevice, error) {
+func (d *FakeDisk) OpenRaw(device string, grant helper.Grant) (helper.RawDevice, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.OpenRawGrants = append(d.OpenRawGrants, grant)
 	if d.OpenRawErr != nil {
 		return nil, d.OpenRawErr
 	}
@@ -198,19 +201,41 @@ func (a FakeAuth) Authenticate(net.Conn) (helper.Peer, error) {
 	return helper.Peer{UID: a.UID}, nil
 }
 
-// FakeAuthorizer accepts exactly Token and records every call. Block, when
-// set, makes every call wait until it is closed, like a sheet nobody has
-// answered; Started is closed on the first call.
+// FakeAuthorizer accepts exactly Token and records every call. Err, when
+// set, is returned for every call instead. Block, when set, makes every
+// call wait until it is closed, like a sheet nobody has answered; Started
+// is closed on the first call.
 type FakeAuthorizer struct {
 	mu      sync.Mutex
 	Token   string
+	Err     error
 	Calls   []proto.Op
+	Devices []string
+	Grants  []*FakeGrant
 	Block   chan struct{}
 	Started chan struct{}
 	started sync.Once
 }
 
-func (a *FakeAuthorizer) Authorize(op proto.Op, token string) error {
+// FakeGrant records whether it was released.
+type FakeGrant struct {
+	mu       sync.Mutex
+	Released bool
+}
+
+func (g *FakeGrant) Release() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.Released = true
+}
+
+func (g *FakeGrant) WasReleased() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.Released
+}
+
+func (a *FakeAuthorizer) Authorize(op proto.Op, token string, device helper.DeviceInfo) (helper.Grant, error) {
 	if a.Started != nil {
 		a.started.Do(func() { close(a.Started) })
 	}
@@ -220,13 +245,18 @@ func (a *FakeAuthorizer) Authorize(op proto.Op, token string) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.Calls = append(a.Calls, op)
-	if token == "" {
-		return fmt.Errorf("no authorization for %s", op)
+	a.Devices = append(a.Devices, device.Path)
+	switch {
+	case a.Err != nil:
+		return nil, a.Err
+	case token == "":
+		return nil, fmt.Errorf("no authorization for %s", op)
+	case token != a.Token:
+		return nil, fmt.Errorf("authorization for %s was refused", op)
 	}
-	if token != a.Token {
-		return fmt.Errorf("authorization for %s was refused", op)
-	}
-	return nil
+	g := &FakeGrant{}
+	a.Grants = append(a.Grants, g)
+	return g, nil
 }
 
 func (a *FakeAuthorizer) CallCount() int {
