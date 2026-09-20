@@ -12,6 +12,9 @@ info:
   copyright: "(c) 2026, Kyle Upton" # Copyright text
   comments: "A program that helps you flash your USB drives" # Comments
   version: "0.1.0" # The application version
+  # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
+  #                               # Should match the name of your .icon file without the extension
+  #                               # If not set and Assets.car exists, defaults to "appicon"
 
 # Dev mode configuration
 dev_mode:
@@ -28,20 +31,17 @@ dev_mode:
       - .DS_Store
       - .gitignore
       - .gitkeep
+      - "*_test.go"
     watched_extension:
       - "*.go"
+      - "*.js" # Watch for changes to JS/TS files included using the //wails:include directive.
+      - "*.ts" # The frontend directory will be excluded entirely by the setting above.
     git_ignore: true
   executes:
-    - cmd: wails3 task common:install:frontend:deps
-      type: once
+    - cmd: wails3 build DEV=true
+      type: blocking
     - cmd: wails3 task common:dev:frontend
       type: background
-    - cmd: go mod tidy
-      type: blocking
-    - cmd: wails3 task build
-    #   type: blocking
-    # - cmd: ./scripts/sign-dev-binary.sh bin/flashit
-      type: blocking
     - cmd: wails3 task run
       type: primary
 
