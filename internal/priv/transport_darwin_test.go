@@ -18,23 +18,32 @@ import (
 // With FLASHIT_TEST_HELPER set the test binary acts as the helper: it serves
 // fd 3 with the real server on a fake disk, exactly as flashit-helper does.
 func TestMain(m *testing.M) {
-	switch os.Getenv("FLASHIT_TEST_HELPER") {
-	case "serve":
-		os.Exit(fakeHelper())
+	switch mode := os.Getenv("FLASHIT_TEST_HELPER"); mode {
+	case "serve", "deny", "hang":
+		os.Exit(fakeHelper(mode))
 	case "exit":
 		os.Exit(3)
 	}
 	os.Exit(m.Run())
 }
 
-func fakeHelper() int {
+// fakeHelper serves fd 3 like flashit-helper. "deny" answers every
+// authorized op with tcc_denied; "hang" never answers the sheet.
+func fakeHelper(mode string) int {
 	f := os.NewFile(3, "app")
 	conn, err := net.FileConn(f)
 	f.Close()
 	if err != nil {
 		return 2
 	}
-	srv := helper.New(helpertest.NewFakeDisk(), nil, helper.Options{Version: "fake", IdleTimeout: 10 * time.Second})
+	opts := helper.Options{Version: "fake", IdleTimeout: 10 * time.Second}
+	switch mode {
+	case "deny":
+		opts.Authorizer = &helpertest.FakeAuthorizer{Err: proto.NewError(proto.CodeTCCDenied, "removable volumes refused")}
+	case "hang":
+		opts.Authorizer = &helpertest.FakeAuthorizer{Block: make(chan struct{})}
+	}
+	srv := helper.New(helpertest.NewFakeDisk(), nil, opts)
 	if err := srv.ServeConn(context.Background(), conn.(*net.UnixConn), helper.Peer{UID: os.Getuid()}); err != nil && !errors.Is(err, helper.ErrIdle) {
 		return 1
 	}
@@ -101,9 +110,14 @@ func TestEnsureReadySpawnsAndRespawns(t *testing.T) {
 	if !second.wait(5 * time.Second) {
 		t.Fatal("helper did not exit after Shutdown")
 	}
-	if s.Disk().Eject(ctx, helpertest.Removable) == nil {
-		t.Fatal("Disk usable after Shutdown")
+	// Ops ensure their own helper, so one after Shutdown spawns again.
+	if err := s.Disk().Eject(ctx, helpertest.Removable); err != nil {
+		t.Fatal(err)
 	}
+	if s.proc == nil || s.proc == second {
+		t.Fatal("op after Shutdown did not spawn a fresh helper")
+	}
+	_ = s.Shutdown(ctx)
 }
 
 func TestEnsureReadyReportsHelperFailures(t *testing.T) {
@@ -121,5 +135,67 @@ func TestEnsureReadyReportsHelperFailures(t *testing.T) {
 	}
 	if s.client != nil {
 		t.Fatal("client kept after a failed handshake")
+	}
+}
+
+// A TCC verdict is cached per process, so a denied helper is retired and the
+// next op gets a fresh one that will ask again.
+func TestTCCDenialRetiresHelper(t *testing.T) {
+	t.Setenv("FLASHIT_TEST_HELPER", "deny")
+	s := &darwinService{findHelper: func() (string, error) { return os.Args[0], nil }}
+	ctx := ctxTimeout(t)
+	if err := s.EnsureReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	denied := s.proc
+	err := s.Disk().WriteISO(ctx, sourceFile(t, 4096), helpertest.Removable, nil)
+	wantCode(t, err, proto.CodeTCCDenied)
+	if s.client != nil || s.proc != nil {
+		t.Fatal("denied helper was kept")
+	}
+	if !denied.wait(5 * time.Second) {
+		t.Fatal("denied helper still running")
+	}
+
+	t.Setenv("FLASHIT_TEST_HELPER", "serve")
+	if err := s.Disk().Eject(ctx, helpertest.Removable); err != nil {
+		t.Fatal(err)
+	}
+	if s.proc == nil || s.proc == denied {
+		t.Fatal("no fresh helper for the retry")
+	}
+}
+
+// A helper blocked in the sheet cannot acknowledge a cancel; once the client
+// gives up on the connection the process is killed, and the sheet with it.
+func TestUnansweredCancelKillsHelper(t *testing.T) {
+	t.Setenv("FLASHIT_TEST_HELPER", "hang")
+	old := cancelGrace
+	cancelGrace = 200 * time.Millisecond
+	t.Cleanup(func() { cancelGrace = old })
+
+	s := &darwinService{findHelper: func() (string, error) { return os.Args[0], nil }}
+	if err := s.EnsureReady(ctxTimeout(t)); err != nil {
+		t.Fatal(err)
+	}
+	stuck := s.proc
+	ctx, cancel := context.WithCancel(ctxTimeout(t))
+	result := make(chan error, 1)
+	go func() { result <- s.Disk().FormatDisk(ctx, helpertest.Removable, "fat32", "X") }()
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("format succeeded behind an unanswered sheet")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("op did not return after cancel")
+	}
+	if !stuck.wait(5 * time.Second) {
+		t.Fatal("helper still running behind the sheet")
+	}
+	if s.client != nil || s.proc != nil {
+		t.Fatal("stuck helper was kept")
 	}
 }

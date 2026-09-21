@@ -17,8 +17,8 @@ import (
 )
 
 // cancelGrace is how long a cancelled op may take to acknowledge before the
-// client gives up on the connection.
-const cancelGrace = 30 * time.Second
+// client gives up on the connection. A variable so tests can shorten it.
+var cancelGrace = 30 * time.Second
 
 // Client speaks the helper protocol over any net.Conn. Responses are demuxed
 // by request ID so a cancel can be sent while an op streams progress.
@@ -168,7 +168,10 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, fds []int, pro
 				c.sendCancel()
 			}
 		case <-grace:
+			// Closing ends the read loop; wait for it so Broken is true by
+			// the time the caller looks.
 			c.conn.Close()
+			<-c.done
 			return proto.Response{}, fmt.Errorf("helper did not acknowledge cancel: %w", ctx.Err())
 		}
 	}
@@ -238,6 +241,10 @@ func (c *Client) fail(err error) {
 		delete(c.pending, id)
 	}
 }
+
+// Broken reports whether the connection is gone: the helper hung up, sent
+// garbage, or the client closed it on a cancel the helper never answered.
+func (c *Client) Broken() bool { return c.readError() != nil }
 
 func (c *Client) readError() error {
 	c.mu.Lock()
