@@ -103,7 +103,6 @@ func (l Linux) Plan(ctx context.Context, req core.CreateRequest) (*core.Plan, er
 		linuxsteps.Unmount{},
 		linuxsteps.Write{},
 		linuxsteps.Eject{},
-		linuxsteps.Cleanup{},
 	)
 
 	runnable := pipeline.Bind(p, state)
