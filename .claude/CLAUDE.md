@@ -45,8 +45,8 @@ internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
 internal/iso/                Hybrid ISO validation and ISO mounting per OS
 internal/wim/                WIM reader, splitter, lzx/ decompressor
-internal/fs/                 File copy, APFS clone on darwin
-internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol v2)
+internal/fs/                 File copy
+internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
 internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
 internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), windows/ (old helper)
 internal/eventbus/           Global emitter wired to app.Event.Emit
