@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/kyleaupton/flashit/internal/helper"
+	"github.com/kyleaupton/flashit/internal/helper/validate"
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
@@ -69,7 +70,7 @@ func NewFakeDisk() *FakeDisk {
 		Parts: map[string][]string{
 			Removable: {Removable + "1", Removable + "2"},
 		},
-		Mountpoint: "/run/media/flashit/FLASHIT",
+		Mountpoint: validate.MountRoot + "/FLASHIT",
 	}
 }
 

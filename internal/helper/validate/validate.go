@@ -22,11 +22,7 @@ type DeviceInfo struct {
 	Removable bool
 }
 
-const (
-	devRoot = "/dev/"
-	// MountRoot is the only place format_disk mounts and unmount will unmount.
-	MountRoot = "/run/media/flashit"
-)
+const devRoot = "/dev/"
 
 var labelRe = regexp.MustCompile(`^[A-Za-z0-9_ -]{1,11}$`)
 

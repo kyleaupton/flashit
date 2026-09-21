@@ -64,7 +64,7 @@ func (a authz) Authorize(op proto.Op, token string, device DeviceInfo) (Grant, e
 		return nil, err
 	}
 
-	g := &authzGrant{raw: raw, device: device.Path}
+	g := &authzGrant{raw: raw, info: device}
 	if st := C.flashit_authz_from_external((*C.uchar)(unsafe.Pointer(&ext[0])), &g.ref); st != 0 {
 		return nil, fmt.Errorf("AuthorizationCreateFromExternalForm: %d", int(st))
 	}
@@ -97,10 +97,10 @@ func (a authz) Authorize(op proto.Op, token string, device DeviceInfo) (Grant, e
 // read-write, so it never leaves this process and is destroyed, not merely
 // freed, as soon as the descriptor is in hand.
 type authzGrant struct {
-	ref    C.AuthorizationRef
-	form   [externalFormLength]byte
-	raw    string
-	device string
+	ref  C.AuthorizationRef
+	form [externalFormLength]byte
+	raw  string
+	info DeviceInfo
 }
 
 func (g *authzGrant) Release() {

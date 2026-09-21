@@ -18,6 +18,7 @@ import (
 
 	"github.com/kyleaupton/flashit/internal/helper"
 	"github.com/kyleaupton/flashit/internal/helper/helpertest"
+	"github.com/kyleaupton/flashit/internal/helper/validate"
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
@@ -613,9 +614,9 @@ func TestUnmount(t *testing.T) {
 	}
 
 	disk.Unmounted = nil
-	_, resp = c.call("2", proto.OpUnmount, proto.UnmountParams{Mountpoint: "/run/media/flashit/FLASHIT"})
+	_, resp = c.call("2", proto.OpUnmount, proto.UnmountParams{Mountpoint: validate.MountRoot + "/FLASHIT"})
 	wantResult(t, resp)
-	if len(disk.Unmounted) != 1 || disk.Unmounted[0] != "/run/media/flashit/FLASHIT" {
+	if len(disk.Unmounted) != 1 || disk.Unmounted[0] != validate.MountRoot+"/FLASHIT" {
 		t.Fatalf("unmounted %v", disk.Unmounted)
 	}
 
@@ -624,9 +625,9 @@ func TestUnmount(t *testing.T) {
 		want   proto.ErrorCode
 	}{
 		{proto.UnmountParams{}, proto.CodeInvalidRequest},
-		{proto.UnmountParams{Device: helpertest.Removable, Mountpoint: "/run/media/flashit/FLASHIT"}, proto.CodeInvalidRequest},
+		{proto.UnmountParams{Device: helpertest.Removable, Mountpoint: validate.MountRoot + "/FLASHIT"}, proto.CodeInvalidRequest},
 		{proto.UnmountParams{Mountpoint: "/"}, proto.CodeInvalidRequest},
-		{proto.UnmountParams{Mountpoint: "/run/media/flashit/../../../boot"}, proto.CodeInvalidRequest},
+		{proto.UnmountParams{Mountpoint: validate.MountRoot + "/../../../boot"}, proto.CodeInvalidRequest},
 		{proto.UnmountParams{Mountpoint: "/home/kyle"}, proto.CodeInvalidRequest},
 		{proto.UnmountParams{Device: helpertest.System}, proto.CodeSystemDisk},
 		{proto.UnmountParams{Device: helpertest.Internal}, proto.CodeNotRemovable},
@@ -641,8 +642,8 @@ func TestUnmount(t *testing.T) {
 		}
 	}
 
-	disk.UnmountErr = map[string]error{"/run/media/flashit/FLASHIT": syscall.EBUSY}
-	_, resp = c.call("3", proto.OpUnmount, proto.UnmountParams{Mountpoint: "/run/media/flashit/FLASHIT"})
+	disk.UnmountErr = map[string]error{validate.MountRoot + "/FLASHIT": syscall.EBUSY}
+	_, resp = c.call("3", proto.OpUnmount, proto.UnmountParams{Mountpoint: validate.MountRoot + "/FLASHIT"})
 	wantError(t, resp, proto.CodeDeviceBusy)
 }
 

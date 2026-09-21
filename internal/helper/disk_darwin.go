@@ -23,6 +23,8 @@ import (
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 const diskutilPath = "/usr/sbin/diskutil"
@@ -33,11 +35,12 @@ type darwinDisk struct {
 	du       diskutil
 	log      *slog.Logger
 	authopen string
+	claim    func(bsd string) (release func(), err error)
 }
 
 // NewDisk returns the diskutil-backed Disk.
 func NewDisk(log *slog.Logger) (Disk, error) {
-	d := &darwinDisk{log: log, authopen: authopenPath}
+	d := &darwinDisk{log: log, authopen: authopenPath, claim: daClaim}
 	d.du = diskutil{run: func(ctx context.Context, args ...string) ([]byte, error) {
 		return exec.CommandContext(ctx, diskutilPath, args...).Output()
 	}}
@@ -123,19 +126,10 @@ func rawDevicePath(info DeviceInfo) string {
 	return "/dev/r" + filepath.Base(info.Path)
 }
 
-// OpenRaw claims the disk through Disk Arbitration, so nothing remounts or
-// re-probes it while it is written, then has authopen open the character
-// node with the grant's credential. The claim is released when the device
-// is closed.
-func (d *darwinDisk) OpenRaw(device string, grant Grant) (RawDevice, error) {
-	g, ok := grant.(*authzGrant)
-	if !ok || g.device != device {
-		return nil, fmt.Errorf("no authorization grant for %s", device)
-	}
-	if !wholeDiskRe.MatchString(device) {
-		return nil, fmt.Errorf("%s is not a whole disk", device)
-	}
-	cbsd := C.CString(filepath.Base(device))
+// daClaim claims bsd through Disk Arbitration so nothing remounts or
+// re-probes the disk until release is called.
+func daClaim(bsd string) (func(), error) {
+	cbsd := C.CString(bsd)
 	defer C.free(unsafe.Pointer(cbsd))
 	var (
 		claim  *C.flashit_da_handle
@@ -144,20 +138,81 @@ func (d *darwinDisk) OpenRaw(device string, grant Grant) (RawDevice, error) {
 	if rc := C.flashit_da_claim(cbsd, &claim, &errbuf[0], C.size_t(len(errbuf))); rc != 0 {
 		return nil, fmt.Errorf("%w: %s", syscall.EBUSY, C.GoString(&errbuf[0]))
 	}
+	return func() { C.flashit_da_unclaim(claim) }, nil
+}
+
+// OpenRaw claims the disk, checks it is still the disk that was validated,
+// then has authopen open the character node with the grant's credential.
+// The claim is released when the device is closed.
+func (d *darwinDisk) OpenRaw(device string, grant Grant) (RawDevice, error) {
+	g, ok := grant.(*authzGrant)
+	if !ok || g.info.Path != device {
+		return nil, fmt.Errorf("no authorization grant for %s", device)
+	}
+	if !wholeDiskRe.MatchString(device) {
+		return nil, fmt.Errorf("%s is not a whole disk", device)
+	}
+	release, err := d.claim(filepath.Base(device))
+	if err != nil {
+		return nil, err
+	}
+	if err := d.recheck(g.info); err != nil {
+		release()
+		return nil, err
+	}
 	// Only readwrite. has a rule in the authorization database, so the open
 	// is O_RDWR even though nothing is read.
 	f, err := authopen(d.authopen, g.raw, unix.O_RDWR, g.form[:])
 	if err != nil {
-		C.flashit_da_unclaim(claim)
+		release()
+		return nil, err
+	}
+	if err := verifyRawDescriptor(f, g.raw); err != nil {
+		f.Close()
+		release()
 		return nil, err
 	}
 	d.log.Info("claimed and opened", "device", device, "raw", g.raw)
-	return &rawDisk{File: f, claim: claim}, nil
+	return &rawDisk{File: f, release: release}, nil
+}
+
+// recheck asks diskutil about the device again. macOS reuses disk numbers,
+// and the sheet took as long as the user wanted, so the node validated
+// before it may be a different disk by now.
+func (d *darwinDisk) recheck(validated DeviceInfo) error {
+	inf, err := d.du.info(context.Background(), validated.Path)
+	if err != nil {
+		return proto.Errorf(proto.CodeInvalidDevice, "recheck %s: %v", validated.Path, err)
+	}
+	now, err := deviceInfoFrom(validated.Path, inf)
+	if err != nil {
+		return proto.Errorf(proto.CodeInvalidDevice, "recheck %s: %v", validated.Path, err)
+	}
+	if now != validated {
+		return proto.Errorf(proto.CodeInvalidDevice, "%s changed since it was validated", validated.Path)
+	}
+	return nil
+}
+
+// verifyRawDescriptor requires the descriptor authopen sent back to be the
+// character node it was asked for: the same rdev as raw, not some file.
+func verifyRawDescriptor(f *os.File, raw string) error {
+	var got, want unix.Stat_t
+	if err := unix.Fstat(int(f.Fd()), &got); err != nil {
+		return fmt.Errorf("fstat authopen descriptor: %w", err)
+	}
+	if err := unix.Stat(raw, &want); err != nil {
+		return fmt.Errorf("stat %s: %w", raw, err)
+	}
+	if got.Mode&unix.S_IFMT != unix.S_IFCHR || got.Rdev != want.Rdev {
+		return fmt.Errorf("authopen returned a descriptor that is not %s", raw)
+	}
+	return nil
 }
 
 type rawDisk struct {
 	*os.File
-	claim *C.flashit_da_handle
+	release func()
 }
 
 // Sync asks the drive to flush its own cache. Raw writes bypass the buffer
@@ -179,8 +234,10 @@ func (r *rawDisk) Sync() error {
 
 func (r *rawDisk) Close() error {
 	err := r.File.Close()
-	C.flashit_da_unclaim(r.claim)
-	r.claim = nil
+	if r.release != nil {
+		r.release()
+		r.release = nil
+	}
 	return err
 }
 

@@ -4,10 +4,12 @@ package helper
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -137,10 +139,129 @@ func TestAuthopenFailures(t *testing.T) {
 
 func TestOpenRawNeedsMatchingGrant(t *testing.T) {
 	d := &darwinDisk{authopen: os.Args[0]}
-	for _, g := range []Grant{nil, NopGrant{}, &authzGrant{raw: "/dev/rdisk9", device: "/dev/disk9"}} {
+	for _, g := range []Grant{nil, NopGrant{}, &authzGrant{raw: "/dev/rdisk9", info: DeviceInfo{Path: "/dev/disk9"}}} {
 		if _, err := d.OpenRaw("/dev/disk8", g); err == nil {
 			t.Fatalf("OpenRaw accepted grant %#v for another device", g)
 		}
+	}
+}
+
+// usbGrant is a grant for the fixtures' USB stick disk4, pointed at a raw
+// path the stub can open: a character device the test names.
+func usbGrant(t *testing.T, raw string) *authzGrant {
+	t.Helper()
+	fd, du := thisMac(t)
+	info, err := deviceInfoFrom("/dev/disk4", mustInfo(t, du, "/dev/disk4"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = fd
+	form := stubForm(t)
+	g := &authzGrant{raw: raw, info: info}
+	copy(g.form[:], form)
+	return g
+}
+
+func mustInfo(t *testing.T, du diskutil, dev string) duInfo {
+	t.Helper()
+	inf, err := du.info(context.Background(), dev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return inf
+}
+
+// OpenRaw with the DA claim stubbed out: the stub authopen opens /dev/null,
+// which is a character device, so the descriptor check passes when it is
+// asked for /dev/null and fails when the stub hands back a regular file.
+func TestOpenRawChecksDeviceAndDescriptor(t *testing.T) {
+	t.Setenv("FLASHIT_TEST_AUTHOPEN", "ok")
+	newDisk := func(t *testing.T, infos map[string]string) (*darwinDisk, *int) {
+		t.Helper()
+		releases := 0
+		fd, du := thisMac(t)
+		for k, v := range infos {
+			fd.infos[k] = v
+		}
+		d := &darwinDisk{du: du, log: slog.New(slog.DiscardHandler), authopen: os.Args[0],
+			claim: func(string) (func(), error) { return func() { releases++ }, nil }}
+		return d, &releases
+	}
+
+	t.Run("same disk, real character device", func(t *testing.T) {
+		d, releases := newDisk(t, nil)
+		g := usbGrant(t, "/dev/null")
+		raw, err := d.OpenRaw("/dev/disk4", g)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if *releases != 0 {
+			t.Fatal("claim released while the device is open")
+		}
+		raw.Close()
+		if *releases != 1 {
+			t.Fatal("claim not released on close")
+		}
+	})
+
+	t.Run("disk replaced since validation", func(t *testing.T) {
+		// disk4 now answers with the disk image's plist: same node, other disk.
+		d, releases := newDisk(t, map[string]string{"disk4": "info-disk-image.plist"})
+		g := usbGrant(t, "/dev/null")
+		_, err := d.OpenRaw("/dev/disk4", g)
+		var pe *proto.Error
+		if !errors.As(err, &pe) || pe.Code != proto.CodeInvalidDevice {
+			t.Fatalf("got %v, want invalid_device", err)
+		}
+		if *releases != 1 {
+			t.Fatal("claim not released after the recheck refused")
+		}
+	})
+
+	t.Run("disk gone since validation", func(t *testing.T) {
+		d, _ := newDisk(t, nil)
+		g := usbGrant(t, "/dev/null")
+		g.info.Path, g.info.WholeDisk = "/dev/disk7", "/dev/disk7"
+		if _, err := d.OpenRaw("/dev/disk7", g); err == nil {
+			t.Fatal("opened a disk diskutil no longer knows")
+		}
+	})
+
+	t.Run("descriptor is not the device", func(t *testing.T) {
+		d, releases := newDisk(t, nil)
+		file := filepath.Join(t.TempDir(), "not-a-disk")
+		if err := os.WriteFile(file, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		g := usbGrant(t, file)
+		if _, err := d.OpenRaw("/dev/disk4", g); err == nil || !strings.Contains(err.Error(), "not "+file) {
+			t.Fatalf("accepted a regular file from authopen: %v", err)
+		}
+		if *releases != 1 {
+			t.Fatal("claim not released after the descriptor was refused")
+		}
+	})
+}
+
+func TestVerifyRawDescriptor(t *testing.T) {
+	null, err := os.Open("/dev/null")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer null.Close()
+	if err := verifyRawDescriptor(null, "/dev/null"); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyRawDescriptor(null, "/dev/zero"); err == nil {
+		t.Fatal("accepted a character device with another rdev")
+	}
+	regular, err := os.CreateTemp(t.TempDir(), "x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer regular.Close()
+	if err := verifyRawDescriptor(regular, "/dev/null"); err == nil {
+		t.Fatal("accepted a regular file")
 	}
 }
 
