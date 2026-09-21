@@ -8,6 +8,7 @@ import (
 
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/logger"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 type Status string
@@ -137,7 +138,7 @@ func (m *Manager) run(ctx context.Context, job *Job) {
 		job.Status = StatusFailed
 		job.UpdatedAt = time.Now()
 		m.mu.Unlock()
-		m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status), Error: err.Error()})
+		m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status), Error: err.Error(), Code: errorCode(err)})
 		return
 	}
 
@@ -147,4 +148,14 @@ func (m *Manager) run(ctx context.Context, job *Job) {
 	job.UpdatedAt = time.Now()
 	m.mu.Unlock()
 	m.emit(core.Event{JobID: job.ID, Type: "state", Message: string(job.Status)})
+}
+
+// errorCode is the helper's code behind err, or empty when it did not come
+// from the helper.
+func errorCode(err error) string {
+	var pe *proto.Error
+	if errors.As(err, &pe) {
+		return string(pe.Code)
+	}
+	return ""
 }

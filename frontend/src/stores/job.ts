@@ -10,6 +10,8 @@ export const useJobStore = defineStore('job', () => {
   const currentJobId = ref<string | null>(null)
   const status = ref<Status | null>(null)
   const error = ref<string | null>(null)
+  // The helper's error code behind a failure, when it came from the helper.
+  const errorCode = ref<string | null>(null)
   const isStarting = ref(false)
   const isCancelling = ref(false)
   const steps = ref<StepState[]>([])
@@ -26,7 +28,7 @@ export const useJobStore = defineStore('job', () => {
   const isCancelled = computed(() => status.value === Status.StatusCancelled)
   // The helper refused before touching the drive because macOS denied FlashIt
   // access to removable volumes; the user can grant it and try again.
-  const tccDenied = computed(() => /\btcc_denied\b/.test(error.value ?? ''))
+  const tccDenied = computed(() => errorCode.value === 'tcc_denied')
 
   function handleJobEvent(event: JobEvent): void {
     // If we're starting a job but don't have the ID yet, buffer the event
@@ -56,6 +58,7 @@ export const useJobStore = defineStore('job', () => {
 
         if (event.error) {
           error.value = event.error
+          errorCode.value = event.code ?? null
           const runningStep = steps.value.find((s) => s.status === 'running')
           if (runningStep) {
             runningStep.status = 'failed'
@@ -114,6 +117,7 @@ export const useJobStore = defineStore('job', () => {
 
       case 'error': {
         error.value = event.error || event.message
+        errorCode.value = event.code ?? null
         const runningStep = steps.value.find((s) => s.status === 'running')
         if (runningStep) {
           runningStep.status = 'failed'
@@ -139,6 +143,7 @@ export const useJobStore = defineStore('job', () => {
   async function startJob(request: StartJobRequest): Promise<string> {
     isStarting.value = true
     error.value = null
+    errorCode.value = null
     status.value = null
     steps.value = []
     pendingEvents = []
@@ -199,6 +204,7 @@ export const useJobStore = defineStore('job', () => {
     currentJobId.value = null
     status.value = null
     error.value = null
+    errorCode.value = null
     steps.value = []
   }
 
@@ -207,6 +213,7 @@ export const useJobStore = defineStore('job', () => {
     currentJobId.value = null
     status.value = null
     error.value = null
+    errorCode.value = null
     isStarting.value = false
     isCancelling.value = false
     steps.value = []
@@ -217,6 +224,7 @@ export const useJobStore = defineStore('job', () => {
     currentJobId,
     status,
     error,
+    errorCode,
     isStarting,
     isCancelling,
     steps,

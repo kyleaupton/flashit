@@ -71,6 +71,9 @@ type Event struct {
 	Step    string  `json:"step,omitempty"` // Uses step key from StepInfos
 	Percent float64 `json:"percent,omitempty"`
 	Error   string  `json:"error,omitempty"`
+	// Code is the helper's error code when a failure came from it (a
+	// proto.ErrorCode), so the frontend can act on it without parsing Error.
+	Code string `json:"code,omitempty"`
 }
 
 type Executor interface {
