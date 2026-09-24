@@ -63,7 +63,7 @@ func main() {
 		PartSizeMiB: 3800, // ~3.7GB parts
 	}
 
-	err = wim.SplitWithProgress(ctx, wimPath, dstPrefix, opts, func(p wim.Progress) bool {
+	err = wim.SplitFileWithProgress(ctx, wimPath, dstPrefix, opts, func(p wim.Progress) bool {
 		now := time.Now()
 		// Report progress every 500ms or on phase change
 		if now.Sub(lastReport) > 500*time.Millisecond || p.Phase == "analyzing" {
