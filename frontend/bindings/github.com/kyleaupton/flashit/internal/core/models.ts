@@ -5,17 +5,6 @@
 // @ts-ignore: Unused imports
 import { Create as $Create } from "@wailsio/runtime";
 
-export enum OSFamily {
-    /**
-     * The Go zero value for the underlying type of the enum.
-     */
-    $zero = "",
-
-    OSWindows = "windows",
-    OSLinux = "linux",
-    OSMacOS = "macos",
-};
-
 /**
  * StepInfo provides metadata about a step for UI display
  */
@@ -56,34 +45,5 @@ export class StepInfo {
     static createFrom($$source: any = {}): StepInfo {
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         return new StepInfo($$parsedSource as Partial<StepInfo>);
-    }
-}
-
-export class Target {
-    "Family": OSFamily;
-    "Version": string;
-    "Arch": string;
-
-    /** Creates a new Target instance. */
-    constructor($$source: Partial<Target> = {}) {
-        if (!("Family" in $$source)) {
-            this["Family"] = OSFamily.$zero;
-        }
-        if (!("Version" in $$source)) {
-            this["Version"] = "";
-        }
-        if (!("Arch" in $$source)) {
-            this["Arch"] = "";
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new Target instance from a string or object.
-     */
-    static createFrom($$source: any = {}): Target {
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        return new Target($$parsedSource as Partial<Target>);
     }
 }

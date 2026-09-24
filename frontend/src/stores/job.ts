@@ -14,6 +14,9 @@ export const useJobStore = defineStore('job', () => {
   const errorCode = ref<string | null>(null)
   const isStarting = ref(false)
   const isCancelling = ref(false)
+  // Set while the OS is asking the user to approve the privileged step; the
+  // drive is untouched until the first progress or step-end arrives.
+  const isAuthorizing = ref(false)
   const steps = ref<StepState[]>([])
 
   let eventUnsubscribe: (() => void) | null = null
@@ -67,6 +70,7 @@ export const useJobStore = defineStore('job', () => {
 
         if (event.message === 'cancelled' || event.message === 'succeeded' || event.message === 'failed') {
           isCancelling.value = false
+          isAuthorizing.value = false
         }
 
         if (event.message === 'succeeded') {
@@ -96,15 +100,22 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'step-end': {
+        isAuthorizing.value = false
         const step = steps.value.find((s) => s.key === event.step)
         if (step) {
-          step.status = 'completed'
-          step.progress = 100
+          step.status = event.error ? 'failed' : 'completed'
+          step.progress = event.error ? step.progress : 100
         }
         break
       }
 
+      case 'authorizing': {
+        isAuthorizing.value = true
+        break
+      }
+
       case 'progress': {
+        isAuthorizing.value = false
         const runningStep = steps.value.find((s) => s.status === 'running')
         if (runningStep) {
           runningStep.progress = event.percent
@@ -145,6 +156,7 @@ export const useJobStore = defineStore('job', () => {
     error.value = null
     errorCode.value = null
     status.value = null
+    isAuthorizing.value = false
     steps.value = []
     pendingEvents = []
 
@@ -174,7 +186,8 @@ export const useJobStore = defineStore('job', () => {
 
       return response.jobId
     } catch (e) {
-      error.value = e instanceof Error ? e.message : 'Failed to start job'
+      // A refused start (unknown image, drive not removable, a job already
+      // running) is the caller's toast, not a failed job.
       throw e
     } finally {
       isStarting.value = false
@@ -205,6 +218,7 @@ export const useJobStore = defineStore('job', () => {
     status.value = null
     error.value = null
     errorCode.value = null
+    isAuthorizing.value = false
     steps.value = []
   }
 
@@ -216,6 +230,7 @@ export const useJobStore = defineStore('job', () => {
     errorCode.value = null
     isStarting.value = false
     isCancelling.value = false
+    isAuthorizing.value = false
     steps.value = []
     pendingEvents = []
   }
@@ -227,6 +242,7 @@ export const useJobStore = defineStore('job', () => {
     errorCode,
     isStarting,
     isCancelling,
+    isAuthorizing,
     steps,
     tccDenied,
     isRunning,

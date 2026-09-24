@@ -9,51 +9,14 @@ import { Create as $Create } from "@wailsio/runtime";
 // @ts-ignore: Unused imports
 import * as core$0 from "../core/models.js";
 
-export class InstallerMeta {
-    "ID": string;
-    "Name": string;
-    "Targets": core$0.Target[];
-
-    /** Creates a new InstallerMeta instance. */
-    constructor($$source: Partial<InstallerMeta> = {}) {
-        if (!("ID" in $$source)) {
-            this["ID"] = "";
-        }
-        if (!("Name" in $$source)) {
-            this["Name"] = "";
-        }
-        if (!("Targets" in $$source)) {
-            this["Targets"] = [];
-        }
-
-        Object.assign(this, $$source);
-    }
-
-    /**
-     * Creates a new InstallerMeta instance from a string or object.
-     */
-    static createFrom($$source: any = {}): InstallerMeta {
-        const $$createField2_0 = $$createType1;
-        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
-        if ("Targets" in $$parsedSource) {
-            $$parsedSource["Targets"] = $$createField2_0($$parsedSource["Targets"]);
-        }
-        return new InstallerMeta($$parsedSource as Partial<InstallerMeta>);
-    }
-}
-
 export class StartJobRequest {
-    "InstallerID": string;
-    "SourceLocal": string;
+    "SourcePath": string;
     "DriveID": string;
 
     /** Creates a new StartJobRequest instance. */
     constructor($$source: Partial<StartJobRequest> = {}) {
-        if (!("InstallerID" in $$source)) {
-            this["InstallerID"] = "";
-        }
-        if (!("SourceLocal" in $$source)) {
-            this["SourceLocal"] = "";
+        if (!("SourcePath" in $$source)) {
+            this["SourcePath"] = "";
         }
         if (!("DriveID" in $$source)) {
             this["DriveID"] = "";
@@ -91,7 +54,7 @@ export class StartJobResponse {
      * Creates a new StartJobResponse instance from a string or object.
      */
     static createFrom($$source: any = {}): StartJobResponse {
-        const $$createField1_0 = $$createType3;
+        const $$createField1_0 = $$createType1;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
         if ("stepInfos" in $$parsedSource) {
             $$parsedSource["stepInfos"] = $$createField1_0($$parsedSource["stepInfos"]);
@@ -101,7 +64,5 @@ export class StartJobResponse {
 }
 
 // Private type creation functions
-const $$createType0 = core$0.Target.createFrom;
+const $$createType0 = core$0.StepInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = core$0.StepInfo.createFrom;
-const $$createType3 = $Create.Array($$createType2);

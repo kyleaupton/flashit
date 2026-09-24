@@ -17,19 +17,15 @@ export function CancelJob(jobID: string): $CancellablePromise<boolean> {
     return $Call.ByID(3452811188, jobID);
 }
 
-export function ListInstallers(): $CancellablePromise<$models.InstallerMeta[]> {
-    return $Call.ByID(849630866).then(($result: any) => {
-        return $$createType1($result);
-    });
-}
-
+/**
+ * StartJob probes the source, picks the installer by what it found, and
+ * refuses a drive the OS does not list as removable before planning.
+ */
 export function StartJob(req: $models.StartJobRequest): $CancellablePromise<$models.StartJobResponse> {
     return $Call.ByID(2679174400, req).then(($result: any) => {
-        return $$createType2($result);
+        return $$createType0($result);
     });
 }
 
 // Private type creation functions
-const $$createType0 = $models.InstallerMeta.createFrom;
-const $$createType1 = $Create.Array($$createType0);
-const $$createType2 = $models.StartJobResponse.createFrom;
+const $$createType0 = $models.StartJobResponse.createFrom;

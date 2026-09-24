@@ -4,12 +4,13 @@ import { useJobStore } from '@/stores'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Check, Circle, Loader2, X, XCircle } from 'lucide-vue-next'
+import { Check, Circle, KeyRound, Loader2, X, XCircle } from 'lucide-vue-next'
 
 const jobStore = useJobStore()
 const steps = computed(() => jobStore.steps)
 const isActive = computed(() => jobStore.isRunning || jobStore.isPending)
 const isCancelling = computed(() => jobStore.isCancelling)
+const isAuthorizing = computed(() => jobStore.isAuthorizing)
 
 async function handleCancel() {
   await jobStore.cancelJob()
@@ -59,9 +60,18 @@ async function handleCancel() {
             <span class="step-name">{{ step.name }}</span>
           </div>
 
+          <!-- The OS is asking for approval; the drive is untouched until it arrives -->
+          <div
+            v-if="step.status === 'running' && isAuthorizing"
+            class="step-details authorizing"
+          >
+            <KeyRound class="authorizing-icon" />
+            <span>Waiting for you to approve access to the drive</span>
+          </div>
+
           <!-- Expanded details for running step with progress -->
           <div
-            v-if="step.status === 'running' && step.hasProgress"
+            v-else-if="step.status === 'running' && step.hasProgress"
             class="step-details"
           >
             <div class="step-progress-row">
@@ -227,6 +237,20 @@ async function handleCancel() {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+}
+
+.authorizing {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: hsl(var(--muted-foreground));
+}
+
+.authorizing-icon {
+  width: 0.875rem;
+  height: 0.875rem;
+  color: hsl(var(--primary));
 }
 
 .step-progress-row {

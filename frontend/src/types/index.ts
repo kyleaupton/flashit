@@ -1,10 +1,9 @@
 // Re-export Wails bindings types for convenience
 export type { Drive } from '@flashit/drives/models'
-export type { InstallerMeta, StartJobRequest, StartJobResponse } from '@flashit/service/models'
-export type { Target, OSFamily, StepInfo } from '@flashit/core/models'
-
-// Import Target for local use in this file
-import type { Target } from '@flashit/core/models'
+export type { StartJobRequest, StartJobResponse } from '@flashit/service/models'
+export type { StepInfo } from '@flashit/core/models'
+export type { SourceInfo } from '@flashit/sources/models'
+export { Kind as SourceKind } from '@flashit/sources/models'
 
 // Frontend-specific types
 
@@ -20,7 +19,7 @@ export enum Status {
 /** Event payload from backend job:event emissions */
 export interface JobEvent {
   jobId: string
-  type: 'state' | 'step-start' | 'step-end' | 'progress' | 'log' | 'error'
+  type: 'state' | 'step-start' | 'step-end' | 'progress' | 'log' | 'error' | 'authorizing'
   message: string
   step: string
   percent: number
@@ -42,22 +41,15 @@ export interface StepState {
   message: string | null
 }
 
-/** Application UI states */
+/**
+ * idle -> source-probed -> target-selected -> running -> done | failed | cancelled.
+ * "authorizing" is a substate of running, exposed separately by the job store.
+ */
 export type AppState =
-  | 'empty'       // Initial: no source selected
-  | 'source-only' // ISO selected, no drive selected
-  | 'ready'       // Both selected, can flash
-  | 'in-progress' // Flashing in progress
-  | 'complete'    // Successfully finished
-  | 'cancelled'   // User cancelled the operation
-  | 'error'       // Error occurred
-
-/** Source file info after selection/detection */
-export interface SourceInfo {
-  path: string
-  filename: string
-  sizeBytes: number
-  installerID: string | null
-  installerName: string | null
-  detectedTargets: Target[]
-}
+  | 'idle'
+  | 'source-probed'
+  | 'target-selected'
+  | 'running'
+  | 'done'
+  | 'failed'
+  | 'cancelled'

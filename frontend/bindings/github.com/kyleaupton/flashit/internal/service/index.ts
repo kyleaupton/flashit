@@ -4,14 +4,15 @@
 import * as DrivesService from "./drivesservice.js";
 import * as JobsService from "./jobsservice.js";
 import * as PrivService from "./privservice.js";
+import * as SourcesService from "./sourcesservice.js";
 export {
     DrivesService,
     JobsService,
-    PrivService
+    PrivService,
+    SourcesService
 };
 
 export {
-    InstallerMeta,
     StartJobRequest,
     StartJobResponse
 } from "./models.js";

@@ -1,31 +1,31 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { Dialogs } from '@wailsio/runtime'
 import { useSourceStore } from '@/stores'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { SourceKind } from '@/types'
 
 const sourceStore = useSourceStore()
 
 const hasSource = computed(() => sourceStore.hasSource)
+const source = computed(() => sourceStore.source)
 const filename = computed(() => sourceStore.filename)
-const installerName = computed(() => sourceStore.detectedInstaller?.Name ?? null)
-const installerId = computed(() => sourceStore.detectedInstaller?.ID ?? null)
+const kindLabel = computed(() => sourceStore.kindLabel)
 const fileSize = computed(() => sourceStore.fileSizeFormatted)
 const isAnalyzing = computed(() => sourceStore.isAnalyzing)
-const isDragOver = ref(false)
+const isUnknown = computed(() => source.value?.kind === SourceKind.Unknown)
 
-// Determine badge variant based on OS
 const badgeClass = computed(() => {
-  const id = installerId.value?.toLowerCase() ?? ''
-  if (id.includes('ubuntu') || id.includes('linux')) {
-    return 'badge-ubuntu'
+  switch (source.value?.kind) {
+    case SourceKind.LinuxISO:
+      return 'badge-linux'
+    case SourceKind.WindowsISO:
+      return 'badge-windows'
+    default:
+      return ''
   }
-  if (id.includes('windows')) {
-    return 'badge-windows'
-  }
-  return ''
 })
 
 async function handleBrowse() {
@@ -46,16 +46,13 @@ async function handleBrowse() {
 </script>
 
 <template>
-  <!-- Empty State: Dropzone -->
+  <!-- Empty State: Dropzone. The Wails runtime marks the card
+       file-drop-target-active while a file is dragged over it. -->
   <Card
     v-if="!hasSource"
     class="dropzone-card"
-    :class="{ 'drag-over': isDragOver }"
+    data-file-drop-target
     @click="handleBrowse"
-    @dragover.prevent="isDragOver = true"
-    @dragenter.prevent="isDragOver = true"
-    @dragleave.prevent="isDragOver = false"
-    @drop.prevent="isDragOver = false"
   >
     <CardContent class="dropzone-content">
       <div class="dropzone-icon">
@@ -75,8 +72,8 @@ async function handleBrowse() {
           <line x1="12" x2="12" y1="3" y2="15" />
         </svg>
       </div>
-      <p class="dropzone-text">Click to select ISO</p>
-      <p class="dropzone-hint">Supports Ubuntu, Windows, and other OS images</p>
+      <p class="dropzone-text">Drop an ISO here or click to select</p>
+      <p class="dropzone-hint">Any hybrid Linux ISO, or a Windows ISO</p>
       <div class="format-chips">
         <span class="format-chip">.iso</span>
         <span class="format-chip">.img</span>
@@ -85,7 +82,7 @@ async function handleBrowse() {
   </Card>
 
   <!-- Loaded State: Source Card -->
-  <Card v-else class="source-card">
+  <Card v-else class="source-card" data-file-drop-target>
     <CardHeader class="source-header">
       <div class="source-header-row">
         <CardTitle class="source-title">Source</CardTitle>
@@ -97,9 +94,9 @@ async function handleBrowse() {
     <CardContent class="source-content">
       <div v-if="isAnalyzing" class="analyzing">
         <div class="spinner" />
-        <span>Analyzing...</span>
+        <span>Reading image...</span>
       </div>
-      <div v-else class="source-info">
+      <div v-else-if="source" class="source-info">
         <div class="source-file">
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -119,12 +116,16 @@ async function handleBrowse() {
           <span class="filename">{{ filename }}</span>
         </div>
         <div class="source-meta">
-          <Badge v-if="installerName" variant="secondary" :class="badgeClass">
-            {{ installerName }}
+          <Badge v-if="kindLabel" variant="secondary" :class="badgeClass">
+            {{ kindLabel }}
           </Badge>
-          <Badge v-else variant="outline">Unknown OS</Badge>
+          <Badge v-else variant="outline">Unknown image</Badge>
           <span v-if="fileSize" class="file-size">{{ fileSize }}</span>
         </div>
+        <p v-if="source.label" class="volume-label">{{ source.label }}</p>
+        <p v-if="isUnknown" class="reason">
+          Cannot flash this image: {{ source.reason }}.
+        </p>
       </div>
     </CardContent>
   </Card>
@@ -139,12 +140,12 @@ async function handleBrowse() {
 }
 
 .dropzone-card:hover,
-.dropzone-card.drag-over {
+.dropzone-card.file-drop-target-active {
   border-color: var(--primary);
   background: var(--accent);
 }
 
-.dropzone-card.drag-over {
+.dropzone-card.file-drop-target-active {
   border-style: solid;
 }
 
@@ -191,6 +192,11 @@ async function handleBrowse() {
 
 .source-card {
   overflow: hidden;
+  transition: border-color 0.2s;
+}
+
+.source-card.file-drop-target-active {
+  border-color: var(--primary);
 }
 
 .source-header {
@@ -270,13 +276,26 @@ async function handleBrowse() {
   color: var(--muted-foreground);
 }
 
+.volume-label {
+  margin: 0;
+  font-size: 0.875rem;
+  font-family: monospace;
+  color: var(--muted-foreground);
+}
+
+.reason {
+  margin: 0;
+  font-size: 0.875rem;
+  color: var(--destructive);
+}
+
 /* OS-specific badge colors */
-.badge-ubuntu {
+.badge-linux {
   background: oklch(0.901 0.076 70.697);
   color: oklch(0.47 0.157 37.304);
 }
 
-.dark .badge-ubuntu {
+.dark .badge-linux {
   background: oklch(0.47 0.157 37.304 / 20%);
   color: oklch(0.901 0.076 70.697);
 }
