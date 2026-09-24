@@ -13,6 +13,21 @@ env:
   NODE_VERSION: '22'
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.VERSION }}
+    steps:
+      - name: Get version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  package-linux:
+    needs: version
+    uses: ./.github/workflows/package-linux.yml
+    with:
+      version: ${{ needs.version.outputs.version }}
+
   build-macos:
     runs-on: macos-latest
     strategy:
@@ -286,7 +301,7 @@ jobs:
           retention-days: 1
 
   create-release:
-    needs: [build-macos, build-windows]
+    needs: [build-macos, build-windows, package-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -358,4 +373,7 @@ jobs:
             artifacts/macos-amd64/flashit-${{ steps.version.outputs.VERSION }}-macos-intel.tar.gz
             artifacts/windows-x64/flashit-${{ steps.version.outputs.VERSION }}-windows-x64-installer.exe
             artifacts/windows-x64/flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip
+            artifacts/linux-amd64/flashit*
+            artifacts/linux-arm64/flashit*
+            artifacts/linux-sha256sums/SHA256SUMS
             artifacts/update.json

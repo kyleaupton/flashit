@@ -1,0 +1,139 @@
+name: Package Linux
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version without the v (default 0.0.0-dev.<run number>)
+        type: string
+        default: ''
+  workflow_call:
+    inputs:
+      version:
+        description: Package version without the v
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  package:
+    name: Package (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # The version lands in -ldflags and package metadata, so only a plain
+      # semver gets through.
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version=${INPUT_VERSION:-0.0.0-dev.$GITHUB_RUN_NUMBER}
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+            echo "::error::version '$version' is not MAJOR.MINOR.PATCH[-PRERELEASE] without a v"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Wails CLI
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          task linux:package VERSION="$VERSION"
+          ls -l bin/flashit_*.deb bin/flashit-*.rpm
+
+      - name: Smoke-test the deb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: sudo build/linux/smoke-test.sh bin/flashit_*.deb "$VERSION"
+
+      - name: Smoke-test the rpm on Fedora
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest \
+            build/linux/smoke-test.sh bin/flashit-*.rpm "$VERSION"
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-${{ matrix.arch }}
+          path: |
+            bin/flashit_*.deb
+            bin/flashit-*.rpm
+          if-no-files-found: error
+          retention-days: 14
+
+  checksums:
+    name: Checksums
+    needs: package
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Download packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: packages
+
+      - name: Write SHA256SUMS
+        working-directory: packages
+        run: |
+          sha256sum flashit_*.deb flashit-*.rpm > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Upload SHA256SUMS
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-sha256sums
+          path: packages/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
