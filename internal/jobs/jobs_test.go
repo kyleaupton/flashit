@@ -68,6 +68,9 @@ func TestEnqueue_RefusesSecondJobWhileRunning(t *testing.T) {
 		t.Fatal(err)
 	}
 	<-r.started
+	if !m.Active() {
+		t.Fatal("Active should be true while the job runs")
+	}
 
 	second, _ := newBlockingPlan()
 	if _, err := m.Enqueue(context.Background(), second); !errors.Is(err, ErrJobActive) {
@@ -76,6 +79,9 @@ func TestEnqueue_RefusesSecondJobWhileRunning(t *testing.T) {
 
 	close(r.release)
 	events.wait(t)
+	if m.Active() {
+		t.Fatal("Active should be false after the job finished")
+	}
 
 	third, r3 := newBlockingPlan()
 	id3, err := m.Enqueue(context.Background(), third)

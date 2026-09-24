@@ -45,6 +45,12 @@ func NewJobsService() *JobsService {
 // StartJob probes the source, picks the installer by what it found, and
 // refuses a drive the OS does not list as removable before planning.
 func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJobResponse, error) {
+	// Checked before Plan, whose EnsureReady pings the helper: mid-op the
+	// helper answers busy and the client would retire the running job's
+	// session. Enqueue checks again under the lock.
+	if s.mgr.Active() {
+		return StartJobResponse{}, jobs.ErrJobActive
+	}
 	if req.SourcePath == "" {
 		return StartJobResponse{}, errors.New("source path is required")
 	}

@@ -80,6 +80,22 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
+// Active reports whether a job is pending or running.
+func (m *Manager) Active() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active()
+}
+
+func (m *Manager) active() bool {
+	for _, j := range m.jobs {
+		if j.Status == StatusPending || j.Status == StatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) {
 	if plan == nil || plan.Runnable == nil {
 		return "", errors.New("plan has no runnable pipeline")
@@ -90,11 +106,9 @@ func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, j := range m.jobs {
-		if j.Status == StatusPending || j.Status == StatusRunning {
-			cancel()
-			return "", ErrJobActive
-		}
+	if m.active() {
+		cancel()
+		return "", ErrJobActive
 	}
 	id := uuid.NewString()
 	job := &Job{ID: id, Plan: plan, Status: StatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now()}
