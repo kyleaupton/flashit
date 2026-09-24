@@ -53,7 +53,7 @@ internal/wim/                WIM reader, splitter, lzx/ decompressor
 internal/fs/                 File copy from an fs.FS onto the target volume
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
 internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
-internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), windows/ (old helper)
+internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), keepalive.go (HoldDuring), privtest/ (fake service), windows/ (old helper)
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
 cmd/flashit-helper/          Go helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3)
@@ -71,7 +71,7 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
 task build                # build for the host OS into bin/
 task darwin:package       # release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
-go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/installers/windows/steps, internal/drives (linux-only)
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only)
 go run ./cmd/isotest <iso>...   # isofs vs hdiutil (macOS) or mount -o loop,ro (Linux, root); exits non-zero on any difference. Run on every Windows ISO at hand before bumping golift.io/udf
 go test -run XXX -fuzz FuzzOpen -fuzztime 10m ./internal/isofs
 FLASHIT_ISO_CORPUS=<dir> go test -run Corpus ./internal/isofs          # isotest over every .iso in <dir>
@@ -106,8 +106,11 @@ The Windows installer's first step, `OpenSource`, reads the ISO in process
 through `internal/isofs` on Linux (where `iso.IsMountSupported()` is false)
 and on macOS or Windows when `FLASHIT_ISO_READER=go`; otherwise it mounts
 the ISO and reads it through `os.DirFS`. The rest of the pipeline sees an
-`fs.FS` either way. Linux does not unmount or eject the stick after a
-flash yet: `sync && sudo umount` it before pulling it.
+`fs.FS` either way. On Linux the helper's format mounts the volume as root
+under `/run/media/flashit/<label>`, so `FormatUSB.Cleanup` (on failure or
+cancel) and `Finalize` unmount and eject it through the helper
+(`FlashContext.HelperMounts`); macOS and Windows eject through `drives` as
+before.
 
 ## Job execution flow
 
@@ -125,6 +128,14 @@ and runs it on a cancellable background context. Steps emit through
 and Wails delivers it to the frontend, where `frontend/src/stores/job.ts`
 subscribes with `Events.On('job:event', ...)`.
 
+Both installers wrap their pipeline in `priv.HoldDuring`, so the job's
+`Run`, cleanups included, holds the privileged session. On Linux the hold
+pings the helper every 20 s (a third of its 60 s idle timeout) so a long
+copy cannot let it exit before the eject; the hold ends when `Run` returns,
+whatever the outcome, and on `Shutdown`, and the helper idles out about 60 s
+later. A failed ping only stops the keepalive: it never respawns the helper
+or raises a second polkit prompt. macOS and Windows need no hold.
+
 ```go
 type Event struct {
 	JobID   string  `json:"jobId"`
@@ -137,13 +148,18 @@ type Event struct {
 ```
 
 The backend emits `Type` values `state`, `step-start`, `step-end`, `progress`,
-`log` and `authorizing`; a failure arrives as a `state` event with `Error`
+`log`, `authorizing` and `warning`; a failure arrives as a `state` event with `Error`
 set and `Code` when the helper refused. `authorizing` is emitted by the write
 and format steps right before the privileged call that raises the OS prompt,
 and the frontend clears it on the next `progress` or `step-end`. A pipeline
 step that implements `CleanupStep` is cleaned up in reverse order when a
 later step fails; the failing step cleans up after itself (the WIM split
-removes the `.swm` parts it wrote to the volume).
+removes the `.swm` parts it wrote to the volume). `warning` carries text in
+`Message` the user must act on although the job succeeded: an eject that
+the helper answered `device_busy` (the files are written but something
+holds the stick). The job store collects warnings per job, and a succeeded
+job with warnings gets `toast.warning` and a warning alert in the done
+view.
 
 Wails only delivers `WindowFilesDropped` to Go listeners, so `main.go`
 relays dropped paths to the frontend as a `files:dropped` event.
@@ -203,7 +219,17 @@ Linux: removable means sysfs `removable` or a USB ancestor; system disks are
 resolved from `/`, `/boot`, `/home` and friends through dm/md slaves (btrfs
 and ZFS roots through the mount source), fail closed. The caller's
 `SO_PEERCRED` uid must equal `PKEXEC_UID`; the socket lives in a 0700
-directory the app creates.
+directory the app creates. `eject` and `unmount` by device only act on a
+target that passed the same gate as a write, and unmount every partition
+and the disk (mounts matched by major:minor from `/proc/self/mountinfo`),
+retrying EBUSY five times a second apart before answering `device_busy`.
+They then remove the directories that device was mounted on, found in the
+mount table before unmounting and never taken from the request: only
+`MountRoot/<valid label>`, only if `Lstat` shows a real directory (not a
+symlink) on the same filesystem as `MountRoot` (no longer a mountpoint), and
+only by `rmdir`. `eject` then syncs, re-reads the partition table and runs
+`eject(1)` if installed; once the unmount worked, a failure there is only
+logged.
 
 macOS: nothing runs as root and there is no daemon, socket file or peer
 check; the helper is the app's own child on an inherited socketpair, so the
