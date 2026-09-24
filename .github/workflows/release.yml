@@ -160,7 +160,7 @@ jobs:
           echo "tar_size=$TAR_SIZE" >> $GITHUB_OUTPUT
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: macos-${{ matrix.arch }}
           path: |
@@ -176,7 +176,7 @@ jobs:
           echo "${{ steps.checksums.outputs.tar_size }}" > checksums/tar-${{ matrix.arch }}.size
 
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: checksums-${{ matrix.arch }}
           path: checksums/
@@ -262,7 +262,7 @@ jobs:
           echo "zip_size=$zipSize" >> $env:GITHUB_OUTPUT
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: windows-x64
           path: |
@@ -279,7 +279,7 @@ jobs:
           Set-Content -Path checksums/zip-amd64.size -Value "${{ steps.checksums.outputs.zip_size }}"
 
       - name: Upload checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: checksums-windows-x64
           path: checksums/
