@@ -57,9 +57,6 @@ func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 	}
 
 	if err := wim.SplitWithProgress(ctx, state.InstallWimPath, splitPrefix, opts, progressCb); err != nil {
-		// The pipeline only cleans up earlier steps, so a half-written set
-		// is this step's own mess to remove.
-		removeParts(splitPrefix)
 		return fmt.Errorf("failed to split WIM: %w", err)
 	}
 
@@ -67,6 +64,8 @@ func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 	return nil
 }
 
+// Cleanup runs when this step or a later one fails; a half-written set of
+// parts on the volume is removed either way.
 func (SplitWim) Cleanup(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if !state.NeedsSplit || core.DryRun || state.USBMountPath == "" {
 		return nil

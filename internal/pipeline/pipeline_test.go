@@ -60,6 +60,25 @@ func (c cleanupStep) Cleanup(ctx context.Context, state *testContext, e core.Exe
 	return nil
 }
 
+// failingCleanupStep fails in Run and records that its Cleanup still ran.
+type failingCleanupStep struct {
+	key       string
+	cleanedUp *bool
+}
+
+func (f failingCleanupStep) Key() string       { return f.key }
+func (f failingCleanupStep) Name() string      { return "Failing cleanup step" }
+func (f failingCleanupStep) HasProgress() bool { return false }
+func (f failingCleanupStep) Run(ctx context.Context, state *testContext, e core.Executor) error {
+	state.Values = append(state.Values, "partial")
+	return errors.New("failed part way")
+}
+func (f failingCleanupStep) Cleanup(ctx context.Context, state *testContext, e core.Executor) error {
+	*f.cleanedUp = true
+	state.Values = append(state.Values, "cleanup-partial")
+	return nil
+}
+
 // mockExecutor captures emitted events.
 type mockExecutor struct {
 	events []core.Event
@@ -154,6 +173,39 @@ func TestPipeline_Run_CleanupOnFailure(t *testing.T) {
 	for i, v := range expectedValues {
 		if state.Values[i] != v {
 			t.Errorf("expected %s at index %d, got %s", v, i, state.Values[i])
+		}
+	}
+}
+
+func TestPipeline_Run_CleanupIncludesFailingStep(t *testing.T) {
+	state := &testContext{}
+	e := &mockExecutor{}
+
+	cleanupA := false
+	cleanupFailing := false
+
+	p := New[testContext](
+		cleanupStep{key: "step-1", value: "A", cleanedUp: &cleanupA},
+		failingCleanupStep{key: "step-2", cleanedUp: &cleanupFailing},
+		mockStep{key: "step-3", value: "C"},
+	)
+
+	if err := p.Run(context.Background(), state, e); err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !cleanupFailing {
+		t.Error("the failing step's cleanup should have run")
+	}
+	if !cleanupA {
+		t.Error("cleanup of the earlier step should have run")
+	}
+	expected := []string{"A", "partial", "cleanup-partial", "cleanup-A"}
+	if len(state.Values) != len(expected) {
+		t.Fatalf("expected %v, got %v", expected, state.Values)
+	}
+	for i, v := range expected {
+		if state.Values[i] != v {
+			t.Fatalf("expected %v, got %v", expected, state.Values)
 		}
 	}
 }
