@@ -22,13 +22,16 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 
 ## Tech Stack
 
-- Go 1.25 (`go.mod` module `github.com/kyleaupton/flashit`)
+- Go 1.26 (`go.mod` module `github.com/kyleaupton/flashit`); `golift.io/udf`
+  needs it
 - Wails v3.0.0-beta.23 (`github.com/wailsapp/wails/v3`, `@wailsio/runtime`)
 - Vue 3 + TypeScript 5.9 + Vite 7, Pinia, Tailwind 4, reka-ui/shadcn-vue
 - Task (`Taskfile.yml`) drives build and dev
 
 WIM reading, splitting and LZX decompression are pure Go in `internal/wim`;
-there is no wimlib dependency. cgo is used only on macOS: the helper's
+there is no wimlib dependency. Windows ISOs are read in process through
+`golift.io/udf`, pinned at v0.1.0 and imported only by `internal/isofs`
+(decision 007). cgo is used only on macOS: the helper's
 Authorization/DiskArbitration bindings in `internal/helper/*_darwin.{c,h}`
 and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 
@@ -45,8 +48,9 @@ internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
 internal/iso/                ISO mounting per OS
+internal/isofs/              In-process UDF reader for Windows ISOs (fs.FS), the only golift importer; isocompare/ checks it against the host mount
 internal/wim/                WIM reader, splitter, lzx/ decompressor
-internal/fs/                 File copy
+internal/fs/                 File copy from an fs.FS onto the target volume
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
 internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
 internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), windows/ (old helper)
@@ -54,6 +58,7 @@ internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
 cmd/flashit-helper/          Go helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3)
 cmd/wimtest/                 CLI for exercising the WIM splitter
+cmd/isotest/                 CLI comparing isofs with the host mount, per file size and SHA-256
 helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
 build/                       Per-platform Taskfiles and packaging config
@@ -66,7 +71,11 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
 task build                # build for the host OS into bin/
 task darwin:package       # release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
-go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/drives (linux-only)
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/installers/windows/steps, internal/drives (linux-only)
+go run ./cmd/isotest <iso>...   # isofs vs hdiutil (macOS) or mount -o loop,ro (Linux, root); exits non-zero on any difference. Run on every Windows ISO at hand before bumping golift.io/udf
+go test -run XXX -fuzz FuzzOpen -fuzztime 10m ./internal/isofs
+FLASHIT_ISO_CORPUS=<dir> go test -run Corpus ./internal/isofs          # isotest over every .iso in <dir>
+FLASHIT_WIN_ISO=<iso> go test -run SplitFromISO ./internal/wim         # .swm parts from isofs and from the mount are identical; needs the WIM's size in TMPDIR
 GOOS=linux go build ./cmd/flashit-helper   # cross-compile the Go helper; `task linux:build:helper` puts it in bin/helpers/
 wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
 cd frontend && npm run build      # main.go embeds frontend/dist, so build it before any go build
@@ -83,7 +92,7 @@ Host OS support:
 | Host    | Drive listing | ISO mount | Privileged helper |
 | ------- | ------------- | --------- | ----------------- |
 | macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` spawned from the bundle as an unprivileged child, socketpair on fd 3; the raw device comes from `authopen` per flash |
-| Linux   | yes (`lsblk`) | no, stub returns an error | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
+| Linux   | yes (`lsblk`) | not needed, read in process (`internal/isofs`) | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
 | Windows | yes (PowerShell) | yes | named-pipe helper |
 
 Installer support, derived from `Plan` guards:
@@ -91,11 +100,14 @@ Installer support, derived from `Plan` guards:
 | Installer  | macOS | Linux | Windows |
 | ---------- | ----- | ----- | ------- |
 | Linux ISO  | yes   | yes   | yes     |
-| Windows ISO| yes   | no    | yes     |
+| Windows ISO| yes   | yes   | yes     |
 
-The Windows installer is unavailable on a Linux host because
-`internal/iso/mount_linux_stub.go` reports `IsSupported() == false`, and
-`windows.Plan` refuses to build a plan without ISO mounting.
+The Windows installer's first step, `OpenSource`, reads the ISO in process
+through `internal/isofs` on Linux (where `iso.IsMountSupported()` is false)
+and on macOS or Windows when `FLASHIT_ISO_READER=go`; otherwise it mounts
+the ISO and reads it through `os.DirFS`. The rest of the pipeline sees an
+`fs.FS` either way. Linux does not unmount or eject the stick after a
+flash yet: `sync && sudo umount` it before pulling it.
 
 ## Job execution flow
 
@@ -150,6 +162,25 @@ cancelled`, with `authorizing` as a substate of `running` on the job store.
 privileged-service setup are skipped when `core.DryRun` is set (`DRY_RUN=1`),
 which also swaps in `drives.MockProvider` and lets any readable file, even
 one that probes as `Unknown`, run the Linux installer's simulated pipeline.
+
+A Windows ISO read in process is untrusted input that decides every path
+written to the stick, so `isofs.Open` checks the whole tree before the
+pipeline formats anything (decision 007). It reads the UDF volume layout
+itself first and accepts one type 1 partition only, then walks golift's
+tree and rejects: names that are empty, `.` or `..`, not valid UTF-8,
+longer than 255 UTF-16 units, hold `/ \ < > : " | ? *` or control
+characters, end in a dot or space, or name a Windows device (`CON`,
+`nul.txt`, `COM1`); two names in one directory that differ only by case;
+any UDF file type but a regular file or directory (symlinks, devices);
+the same file entry reached twice (cycles, hard links); more than 32
+levels or 100,000 entries; chained allocation descriptors, which golift
+follows without a bound; more than 64 MiB of directory and file entry
+metadata or a million extents; and a file whose extents do not all read
+back up to its recorded length. golift panics are recovered into errors.
+`fs.CopyDir` then refuses any destination that `filepath.IsLocal` rejects
+or that lands outside the volume, anything but a regular file (symlinks on
+a mounted image), a file that yields a different byte count than its
+size, and overwriting an existing file.
 
 The Go helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block

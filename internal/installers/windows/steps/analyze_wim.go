@@ -4,8 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
+	"io/fs"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/core"
@@ -33,18 +34,17 @@ func (AnalyzeWim) Run(ctx context.Context, state *FlashContext, e core.Executor)
 
 	e.Emit(core.Event{Type: "log", Message: "Analyzing install.wim..."})
 
-	wimPath, err := findInstallWim(state.ISOMountPath)
+	wimPath, err := findInstallWim(state.Source)
 	if err != nil {
 		return err
 	}
-
-	state.InstallWimPath = wimPath
-
-	info, err := os.Stat(wimPath)
+	info, err := fs.Stat(state.Source, wimPath)
 	if err != nil {
 		return fmt.Errorf("failed to stat install.wim: %w", err)
 	}
 
+	state.InstallWim = wimPath
+	state.InstallWimSize = info.Size()
 	state.NeedsSplit = info.Size() > fat32MaxFileSize
 
 	e.Emit(core.Event{Type: "log", Message: fmt.Sprintf("install.wim size: %.2f GB (needs split: %v)",
@@ -53,19 +53,24 @@ func (AnalyzeWim) Run(ctx context.Context, state *FlashContext, e core.Executor)
 	return nil
 }
 
-// findInstallWim locates the install.wim file in a mounted Windows ISO.
-func findInstallWim(mountPoint string) (string, error) {
-	candidates := []string{
-		filepath.Join(mountPoint, "sources", "install.wim"),
-		filepath.Join(mountPoint, "Sources", "install.wim"),
-		filepath.Join(mountPoint, "SOURCES", "install.wim"),
+// findInstallWim locates sources/install.wim in any letter case.
+func findInstallWim(src fs.FS) (string, error) {
+	dir, err := findEntry(src, ".", "sources", true)
+	if err != nil {
+		return "", err
 	}
+	return findEntry(src, dir, "install.wim", false)
+}
 
-	for _, path := range candidates {
-		if _, err := os.Stat(path); err == nil {
-			return path, nil
+func findEntry(src fs.FS, dir, name string, wantDir bool) (string, error) {
+	entries, err := fs.ReadDir(src, dir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if strings.EqualFold(e.Name(), name) && e.IsDir() == wantDir {
+			return path.Join(dir, e.Name()), nil
 		}
 	}
-
 	return "", errors.New("install.wim not found in ISO")
 }

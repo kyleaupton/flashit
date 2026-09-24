@@ -2,26 +2,21 @@ package fs
 
 import (
 	"context"
+	"fmt"
 	"io"
+	iofs "io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
-
-// CopyFileOptions configures single file copy behavior.
-type CopyFileOptions struct {
-	SyncAfter        bool          // Sync to disk after copy completes (default: true if zero value)
-	SyncEvery        int64         // Sync after N bytes written (0 = no intermediate syncs)
-	ProgressInterval time.Duration // Throttle progress callbacks (0 = every chunk)
-	BufferSize       int           // Read/write buffer size (default 2MB)
-}
 
 // CopyDirOptions configures directory copy behavior.
 type CopyDirOptions struct {
 	// Filter returns true if a file should be copied, false to skip.
-	// Receives the relative path (from src root) and file info.
+	// Receives the slash-separated path within the source and its info.
 	// If nil, all files are copied.
-	Filter func(relPath string, info os.FileInfo) bool
+	Filter func(relPath string, info iofs.FileInfo) bool
 
 	SyncAfter        bool          // Sync each file to disk after copy completes
 	SyncEvery        int64         // Sync after N bytes written per file (0 = no intermediate syncs)
@@ -37,124 +32,35 @@ type CopyProgress struct {
 
 const defaultBufferSize = 2 * 1024 * 1024 // 2MB
 
-// CopyFile copies a single file from src to dst with configurable sync and progress throttling.
-// The onProgress callback receives progress updates and should return true to continue, false to cancel.
+// CopyDir copies every regular file and directory in src into dst with
+// progress reporting. Anything else in src (a symlink on a mounted image,
+// say) fails the copy rather than being followed.
+// The onProgress callback receives cumulative progress across all files and should return true to continue, false to cancel.
 // If onProgress is nil, no progress reporting occurs.
-func CopyFile(ctx context.Context, src, dst string, opts CopyFileOptions, onProgress func(CopyProgress) bool) error {
-	// Apply defaults
+func CopyDir(ctx context.Context, src iofs.FS, dst string, opts CopyDirOptions, onProgress func(CopyProgress) bool) error {
 	bufSize := opts.BufferSize
 	if bufSize <= 0 {
 		bufSize = defaultBufferSize
 	}
 
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
-	}
-
-	srcFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer srcFile.Close()
-
-	// Get file size for progress reporting
-	srcInfo, err := srcFile.Stat()
-	if err != nil {
-		return err
-	}
-	totalSize := srcInfo.Size()
-
-	dstFile, err := os.Create(dst)
-	if err != nil {
-		return err
-	}
-	defer dstFile.Close()
-
-	buf := make([]byte, bufSize)
-	var written int64
-	var lastSyncAt int64
-	var lastProgressAt time.Time
-
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		n, readErr := srcFile.Read(buf)
-		if n > 0 {
-			if _, writeErr := dstFile.Write(buf[:n]); writeErr != nil {
-				return writeErr
-			}
-			written += int64(n)
-
-			// Intermediate sync if configured
-			if opts.SyncEvery > 0 && written-lastSyncAt >= opts.SyncEvery {
-				if err := dstFile.Sync(); err != nil {
-					return err
-				}
-				lastSyncAt = written
-			}
-
-			// Throttled progress callback
-			if onProgress != nil {
-				shouldEmit := opts.ProgressInterval == 0 ||
-					time.Since(lastProgressAt) >= opts.ProgressInterval ||
-					written == totalSize // Always emit on completion
-
-				if shouldEmit {
-					if !onProgress(CopyProgress{Written: written, Total: totalSize}) {
-						return context.Canceled
-					}
-					lastProgressAt = time.Now()
-				}
-			}
-		}
-
-		if readErr == io.EOF {
-			break
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
-
-	// Final sync
-	if opts.SyncAfter {
-		if err := dstFile.Sync(); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// CopyDir recursively copies files from src to dst with progress reporting.
-// The onProgress callback receives cumulative progress across all files and should return true to continue, false to cancel.
-// If onProgress is nil, no progress reporting occurs.
-func CopyDir(ctx context.Context, src, dst string, opts CopyDirOptions, onProgress func(CopyProgress) bool) error {
-	// First pass: calculate total size of files to copy
 	var totalBytes int64
-	err := filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	err := iofs.WalkDir(src, ".", func(p string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if d.IsDir() {
 			return nil
 		}
-
-		relPath, err := filepath.Rel(src, path)
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", p)
+		}
+		info, err := d.Info()
 		if err != nil {
 			return err
 		}
-
-		// Apply filter
-		if opts.Filter != nil && !opts.Filter(relPath, info) {
+		if opts.Filter != nil && !opts.Filter(p, info) {
 			return nil
 		}
-
 		totalBytes += info.Size()
 		return nil
 	})
@@ -162,60 +68,43 @@ func CopyDir(ctx context.Context, src, dst string, opts CopyDirOptions, onProgre
 		return err
 	}
 
-	// Second pass: copy files with progress
 	var writtenBytes int64
 	var lastProgressAt time.Time
+	buf := make([]byte, bufSize)
 
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+	return iofs.WalkDir(src, ".", func(p string, d iofs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-
-		// Check for cancellation
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		relPath, err := filepath.Rel(src, path)
-		if err != nil {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		dstPath := filepath.Join(dst, relPath)
-
-		if info.IsDir() {
+		dstPath, err := destination(dst, p)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return os.MkdirAll(dstPath, 0755)
 		}
-
-		// Apply filter
-		if opts.Filter != nil && !opts.Filter(relPath, info) {
+		if !d.Type().IsRegular() {
+			return fmt.Errorf("%s is not a regular file", p)
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if opts.Filter != nil && !opts.Filter(p, info) {
 			return nil
 		}
 
-		// Copy the file with progress
-		fileOpts := CopyFileOptions{
-			SyncAfter:  opts.SyncAfter,
-			SyncEvery:  opts.SyncEvery,
-			BufferSize: opts.BufferSize,
-			// Don't throttle individual file progress - we throttle at directory level
-			ProgressInterval: 0,
-		}
-
-		fileSize := info.Size()
-		err = CopyFile(ctx, path, dstPath, fileOpts, func(p CopyProgress) bool {
+		written, err := copyFile(ctx, src, p, dstPath, info.Size(), buf, opts, func(n int64) bool {
 			if onProgress == nil {
 				return true
 			}
-
-			// Throttle progress at directory level
-			shouldEmit := opts.ProgressInterval == 0 ||
-				time.Since(lastProgressAt) >= opts.ProgressInterval ||
-				(writtenBytes+p.Written == totalBytes) // Always emit on completion
-
-			if shouldEmit {
-				if !onProgress(CopyProgress{Written: writtenBytes + p.Written, Total: totalBytes}) {
+			done := writtenBytes + n
+			if opts.ProgressInterval == 0 || time.Since(lastProgressAt) >= opts.ProgressInterval || done == totalBytes {
+				if !onProgress(CopyProgress{Written: done, Total: totalBytes}) {
 					return false
 				}
 				lastProgressAt = time.Now()
@@ -225,8 +114,88 @@ func CopyDir(ctx context.Context, src, dst string, opts CopyDirOptions, onProgre
 		if err != nil {
 			return err
 		}
-		writtenBytes += fileSize
-
+		writtenBytes += written
 		return nil
 	})
+}
+
+// destination joins a source path onto dst and refuses any result that is
+// not inside dst. The source is expected to have been checked already;
+// this is the last line if it was not.
+func destination(dst, p string) (string, error) {
+	if !iofs.ValidPath(p) {
+		return "", fmt.Errorf("refusing to copy %q: not a valid path", p)
+	}
+	if p == "." {
+		return dst, nil
+	}
+	local := filepath.FromSlash(p)
+	if !filepath.IsLocal(local) {
+		return "", fmt.Errorf("refusing to copy %q: it would leave the target volume", p)
+	}
+	out := filepath.Join(dst, local)
+	rel, err := filepath.Rel(dst, out)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("refusing to copy %q: it would leave the target volume", p)
+	}
+	return out, nil
+}
+
+// copyFile copies one file, reporting the bytes written so far to
+// onProgress. The destination must not exist yet: on a freshly formatted
+// volume an existing file means two source names landed on one FAT32 name.
+func copyFile(ctx context.Context, src iofs.FS, p, dstPath string, size int64, buf []byte, opts CopyDirOptions, onProgress func(int64) bool) (int64, error) {
+	in, err := src.Open(p)
+	if err != nil {
+		return 0, err
+	}
+	defer in.Close()
+
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return 0, err
+	}
+	out, err := os.OpenFile(dstPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if err != nil {
+		return 0, err
+	}
+	defer out.Close()
+
+	var written, lastSyncAt int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return written, err
+		}
+		n, readErr := in.Read(buf)
+		if n > 0 {
+			if _, err := out.Write(buf[:n]); err != nil {
+				return written, err
+			}
+			written += int64(n)
+			if opts.SyncEvery > 0 && written-lastSyncAt >= opts.SyncEvery {
+				if err := out.Sync(); err != nil {
+					return written, err
+				}
+				lastSyncAt = written
+			}
+			if !onProgress(written) {
+				return written, context.Canceled
+			}
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			return written, fmt.Errorf("reading %s: %w", p, readErr)
+		}
+	}
+
+	if written != size {
+		return written, fmt.Errorf("%s yielded %d bytes but its size is %d", p, written, size)
+	}
+	if opts.SyncAfter {
+		if err := out.Sync(); err != nil {
+			return written, err
+		}
+	}
+	return written, out.Close()
 }

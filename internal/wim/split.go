@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -40,13 +41,29 @@ type splitPart struct {
 	dataSize int64 // Total size of blob data in this part
 }
 
-// SplitWithProgress splits a WIM file into multiple SWM parts for FAT32 compatibility.
-// Each part will be named with the pattern: <dstPrefix>.swm, <dstPrefix>2.swm, etc.
+// SplitFileWithProgress splits the WIM file at srcPath; see SplitWithProgress.
+func SplitFileWithProgress(ctx context.Context, srcPath, dstPrefix string, opts SplitOptions, cb func(Progress) bool) error {
+	f, err := os.Open(srcPath)
+	if err != nil {
+		return fmt.Errorf("failed to open source WIM: %w", err)
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	return SplitWithProgress(ctx, f, info.Size(), dstPrefix, opts, cb)
+}
+
+// SplitWithProgress splits a WIM of the given size into multiple SWM parts
+// for FAT32 compatibility. Each part will be named with the pattern:
+// <dstPrefix>.swm, <dstPrefix>2.swm, etc.
 //
 // The callback is called periodically with progress updates. Return false to cancel.
 func SplitWithProgress(
 	ctx context.Context,
-	srcWIM string,
+	src io.ReaderAt,
+	size int64,
 	dstPrefix string,
 	opts SplitOptions,
 	cb func(Progress) bool,
@@ -55,13 +72,6 @@ func SplitWithProgress(
 		opts.PartSizeMiB = 3800 // ~3.7 GB, safe for FAT32's 4GB limit
 	}
 	partSizeBytes := int64(opts.PartSizeMiB) * 1024 * 1024
-
-	// Open source WIM
-	srcFile, err := os.Open(srcWIM)
-	if err != nil {
-		return fmt.Errorf("failed to open source WIM: %w", err)
-	}
-	defer srcFile.Close()
 
 	// Report analyzing phase
 	if cb != nil {
@@ -72,7 +82,7 @@ func SplitWithProgress(
 
 	// Read and parse source WIM header
 	var srcHeader WimHeader
-	if err := binary.Read(srcFile, binary.LittleEndian, &srcHeader); err != nil {
+	if err := binary.Read(io.NewSectionReader(src, 0, size), binary.LittleEndian, &srcHeader); err != nil {
 		return fmt.Errorf("failed to read WIM header: %w", err)
 	}
 
@@ -84,10 +94,18 @@ func SplitWithProgress(
 		return fmt.Errorf("source WIM is already split (part %d of %d)", srcHeader.PartNumber, srcHeader.TotalParts)
 	}
 
+	if !within(srcHeader.OffsetTable, size) || !within(srcHeader.XMLData, size) {
+		return errors.New("WIM header points past the end of the file")
+	}
 	// Read all stream descriptors from offset table
-	streams, err := readAllStreams(srcFile, &srcHeader)
+	streams, err := readAllStreams(src, &srcHeader)
 	if err != nil {
 		return fmt.Errorf("failed to read stream table: %w", err)
+	}
+	for _, s := range streams {
+		if !within(s.stream.ResourceDescriptor, size) {
+			return fmt.Errorf("WIM resource at %d lies past the end of the file", s.stream.Offset)
+		}
 	}
 
 	// Calculate total data size
@@ -116,8 +134,8 @@ func SplitWithProgress(
 	}
 
 	// Generate a new GUID for this split set
-	var newGUID guid
-	if err := binary.Read(rand.Reader, binary.LittleEndian, &newGUID); err != nil {
+	newGUID, err := newSplitGUID()
+	if err != nil {
 		return fmt.Errorf("failed to generate GUID: %w", err)
 	}
 
@@ -140,7 +158,7 @@ func SplitWithProgress(
 			partPath = fmt.Sprintf("%s%d.swm", dstPrefix, partNum)
 		}
 
-		_, err = writeSWMPart(ctx, srcFile, partPath, &srcHeader, newGUID, part, partNum, numParts, func(n int64) bool {
+		_, err = writeSWMPart(ctx, src, partPath, &srcHeader, newGUID, part, partNum, numParts, func(n int64) bool {
 			totalWritten += n
 			if cb != nil {
 				return cb(Progress{
@@ -161,8 +179,22 @@ func SplitWithProgress(
 	return nil
 }
 
+// newSplitGUID names the split set. Tests replace it to get parts they can
+// compare byte for byte.
+var newSplitGUID = func() (guid, error) {
+	var g guid
+	err := binary.Read(rand.Reader, binary.LittleEndian, &g)
+	return g, err
+}
+
+// within reports whether a resource lies inside a file of the given size.
+func within(r ResourceDescriptor, size int64) bool {
+	n := r.CompressedSize()
+	return r.Offset >= 0 && n >= 0 && r.Offset <= size && n <= size-r.Offset
+}
+
 // readAllStreams reads all stream descriptors from the WIM's offset table.
-func readAllStreams(f *os.File, hdr *WimHeader) ([]*splitBlob, error) {
+func readAllStreams(f io.ReaderAt, hdr *WimHeader) ([]*splitBlob, error) {
 	// Seek to offset table
 	tableOffset := hdr.OffsetTable.Offset
 	tableSize := hdr.OffsetTable.CompressedSize()
@@ -267,7 +299,7 @@ func assignBlobsToParts(blobs []*splitBlob, maxPartSize int64) []*splitPart {
 // writeSWMPart writes a single SWM part file.
 func writeSWMPart(
 	ctx context.Context,
-	srcFile *os.File,
+	srcFile io.ReaderAt,
 	dstPath string,
 	srcHeader *WimHeader,
 	newGUID guid,
@@ -397,7 +429,7 @@ func writeSWMPart(
 // copyBlobData copies raw blob data from source to destination with chunk-level progress.
 // onChunk is called after each chunk is written with the number of bytes just written.
 // Return false from onChunk to cancel the operation.
-func copyBlobData(ctx context.Context, src *os.File, dst *os.File, srcOffset int64, size int64, buf []byte, onChunk func(int64) bool) (int64, error) {
+func copyBlobData(ctx context.Context, src io.ReaderAt, dst *os.File, srcOffset int64, size int64, buf []byte, onChunk func(int64) bool) (int64, error) {
 	var copied int64
 	for copied < size {
 		// Check for cancellation

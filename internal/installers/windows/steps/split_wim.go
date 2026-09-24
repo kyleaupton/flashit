@@ -2,8 +2,11 @@ package steps
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -32,8 +35,18 @@ func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 
 	e.Emit(core.Event{Type: core.EventLog, Message: "Splitting install.wim onto the drive..."})
 
+	src, err := state.Source.Open(state.InstallWim)
+	if err != nil {
+		return fmt.Errorf("failed to open install.wim: %w", err)
+	}
+	defer src.Close()
+	ra, ok := src.(io.ReaderAt)
+	if !ok {
+		return errors.New("install.wim cannot be read at an offset")
+	}
+
 	// SplitWithProgress appends .swm, 2.swm, ... to the prefix.
-	splitPrefix := filepath.Join(state.USBMountPath, "sources", "install")
+	splitPrefix := state.splitPrefix()
 	opts := wim.SplitOptions{
 		PartSizeMiB: 3800, // 3800 MiB parts for safety margin under FAT32's 4GB limit
 	}
@@ -56,7 +69,7 @@ func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 		return true
 	}
 
-	if err := wim.SplitWithProgress(ctx, state.InstallWimPath, splitPrefix, opts, progressCb); err != nil {
+	if err := wim.SplitWithProgress(ctx, ra, state.InstallWimSize, splitPrefix, opts, progressCb); err != nil {
 		return fmt.Errorf("failed to split WIM: %w", err)
 	}
 
@@ -71,8 +84,14 @@ func (SplitWim) Cleanup(ctx context.Context, state *FlashContext, e core.Executo
 		return nil
 	}
 	e.Emit(core.Event{Type: core.EventLog, Message: "Removing split WIM parts..."})
-	removeParts(filepath.Join(state.USBMountPath, "sources", "install"))
+	removeParts(state.splitPrefix())
 	return nil
+}
+
+// splitPrefix puts the parts next to where install.wim would have gone,
+// in the sources directory as the ISO spells it.
+func (s *FlashContext) splitPrefix() string {
+	return filepath.Join(s.USBMountPath, filepath.FromSlash(path.Dir(s.InstallWim)), "install")
 }
 
 func removeParts(prefix string) {

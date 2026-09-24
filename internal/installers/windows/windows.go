@@ -9,7 +9,6 @@ import (
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/drives"
 	winsteps "github.com/kyleaupton/flashit/internal/installers/windows/steps"
-	"github.com/kyleaupton/flashit/internal/iso"
 	"github.com/kyleaupton/flashit/internal/pipeline"
 	"github.com/kyleaupton/flashit/internal/priv"
 	"github.com/kyleaupton/flashit/internal/sources"
@@ -28,7 +27,7 @@ func (w Windows) ID() string   { return "windows" }
 func (w Windows) Name() string { return "Windows" }
 
 func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.Drive) (*core.Plan, error) {
-	if !iso.IsMountSupported() || !drives.IsSupported() {
+	if !drives.IsSupported() {
 		return nil, errors.New("Windows USB creation is not supported on this platform")
 	}
 	if src.Kind != sources.WindowsISO {
@@ -56,7 +55,7 @@ func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.
 	}
 
 	p := pipeline.New(
-		winsteps.MountISO{},
+		winsteps.OpenSource{},
 		winsteps.FormatUSB{},
 		winsteps.AnalyzeWim{},
 		winsteps.CopyFiles{},
