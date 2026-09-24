@@ -14,9 +14,9 @@ vars:
   CROSS_IMAGE: wails-cross
 
   # Override with VERSION=1.2.3. Packages need a leading digit, so a tree
-  # with no tag in reach becomes 0.0.0-<commit>.
+  # with no v tag in reach becomes 0.0.0-<commit>, never a bare hash.
   VERSION:
-    sh: (git describe --tags --always 2>/dev/null || echo dev) | sed -e 's/^v//' -e 's/^\([^0-9]\)/0.0.0-\1/'
+    sh: 'v=$(git describe --tags --match "v[0-9]*" 2>/dev/null) && echo "${v#v}" || echo "0.0.0-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"'
 
 tasks:
   build:
