@@ -14,10 +14,15 @@ import (
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
+// keepaliveInterval is a third of the helper's 60 s idle timeout, which the
+// app does not override.
+const keepaliveInterval = 20 * time.Second
+
 type linuxService struct {
 	mu     sync.Mutex
 	proc   *helperProcess
 	client *Client
+	hold   *keepalive
 }
 
 func platformService() PrivilegedService { return &linuxService{} }
@@ -77,6 +82,35 @@ func (s *linuxService) Disk() DiskOps {
 	return &linuxDiskOps{client: s.client}
 }
 
+// Hold pings the current session until release. Respawning would cost a
+// second polkit prompt, so a helper that is already gone stays gone and the
+// next op reports it.
+func (s *linuxService) Hold() func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopHold()
+	if s.client == nil {
+		return func() {}
+	}
+	k := startKeepalive(s.client, keepaliveInterval)
+	s.hold = k
+	return func() {
+		k.stop()
+		s.mu.Lock()
+		if s.hold == k {
+			s.hold = nil
+		}
+		s.mu.Unlock()
+	}
+}
+
+func (s *linuxService) stopHold() {
+	if s.hold != nil {
+		s.hold.stop()
+		s.hold = nil
+	}
+}
+
 func (s *linuxService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -87,6 +121,7 @@ func (s *linuxService) Shutdown(ctx context.Context) error {
 // dropClient closes the session and releases the helper; proc stays set
 // until it has actually exited.
 func (s *linuxService) dropClient() {
+	s.stopHold()
 	if s.client != nil {
 		s.client.Close()
 		s.client = nil
@@ -120,4 +155,8 @@ func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem
 
 func (d *linuxDiskOps) Eject(ctx context.Context, device string) error {
 	return d.client.Eject(ctx, device)
+}
+
+func (d *linuxDiskOps) Unmount(ctx context.Context, device string) error {
+	return d.client.Unmount(ctx, device)
 }

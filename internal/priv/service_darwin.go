@@ -102,6 +102,10 @@ func (s *darwinService) afterOp(c *Client, err error) {
 
 func (s *darwinService) Disk() DiskOps { return &darwinDiskOps{s: s} }
 
+// Hold is a no-op: the helper is an unprivileged child that session
+// respawns without a prompt whenever an op needs it.
+func (s *darwinService) Hold() func() { return func() {} }
+
 func (s *darwinService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,6 +176,16 @@ func (d *darwinDiskOps) Eject(ctx context.Context, device string) error {
 		return err
 	}
 	err = c.Eject(ctx, device)
+	d.s.afterOp(c, err)
+	return err
+}
+
+func (d *darwinDiskOps) Unmount(ctx context.Context, device string) error {
+	c, err := d.s.session(ctx)
+	if err != nil {
+		return err
+	}
+	err = c.Unmount(ctx, device)
 	d.s.afterOp(c, err)
 	return err
 }

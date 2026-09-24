@@ -14,3 +14,5 @@ func (unavailableDiskOps) FormatDisk(context.Context, string, string, string) er
 }
 
 func (unavailableDiskOps) Eject(context.Context, string) error { return ErrHelperNotRunning }
+
+func (unavailableDiskOps) Unmount(context.Context, string) error { return ErrHelperNotRunning }

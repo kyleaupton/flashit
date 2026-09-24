@@ -3,6 +3,8 @@ package priv
 import (
 	"context"
 	"errors"
+
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 // ErrHelperNotRunning is returned by DiskOps when EnsureReady has not
@@ -23,8 +25,13 @@ type DiskOps interface {
 	// accepts FAT32.
 	FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error
 
-	// Eject detaches the device once writing is done.
+	// Eject detaches the device once writing is done. On Linux the helper
+	// unmounts it first and answers device_busy when something still holds
+	// the volume; see IsDeviceBusy.
 	Eject(ctx context.Context, device string) error
+
+	// Unmount unmounts every volume on the device, leaving it attached.
+	Unmount(ctx context.Context, device string) error
 }
 
 // PrivilegedService provides access to privileged operations.
@@ -33,7 +40,18 @@ type DiskOps interface {
 type PrivilegedService interface {
 	EnsureReady(ctx context.Context) error
 	Disk() DiskOps
+	// Hold keeps the session EnsureReady made alive until release is
+	// called, so a long unprivileged step cannot let the helper idle out.
+	// It never starts a helper. release is safe to call more than once.
+	Hold() (release func())
 	Shutdown(ctx context.Context) error
+}
+
+// IsDeviceBusy reports whether err is the helper refusing because something
+// still holds a volume on the device.
+func IsDeviceBusy(err error) bool {
+	var pe *proto.Error
+	return errors.As(err, &pe) && pe.Code == proto.CodeDeviceBusy
 }
 
 var defaultService PrivilegedService = platformService()

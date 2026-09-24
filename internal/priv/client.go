@@ -161,6 +161,11 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, fds []int, pro
 				return resp, fmt.Errorf("unknown response type %q", resp.Type)
 			}
 		case <-ctxDone:
+			// A ping is answered inline and cancels nothing; sending cancel
+			// for it would abort whatever op is in flight.
+			if op == proto.OpPing {
+				return proto.Response{}, ctx.Err()
+			}
 			cancelled = true
 			ctxDone = nil
 			grace = time.After(cancelGrace)
