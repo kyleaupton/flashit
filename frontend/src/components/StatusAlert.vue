@@ -8,6 +8,7 @@ const props = defineProps<{
   status: AppState
   error?: string | null
   errorCode?: string | null
+  warnings?: string[]
 }>()
 
 const emit = defineEmits<{
@@ -42,7 +43,8 @@ const codeCopy: Record<string, { title: string; text: string }> = {
   },
 }
 
-const isSuccess = computed(() => props.status === 'done')
+const hasWarnings = computed(() => props.status === 'done' && (props.warnings?.length ?? 0) > 0)
+const isSuccess = computed(() => props.status === 'done' && !hasWarnings.value)
 const isCancelled = computed(() => props.status === 'cancelled')
 const isTccDenied = computed(() => props.status === 'failed' && props.errorCode === 'tcc_denied')
 const isError = computed(() => props.status === 'failed' && !isTccDenied.value)
@@ -69,6 +71,29 @@ const copy = computed(() => (props.errorCode && codeCopy[props.errorCode]) || nu
     <AlertTitle>Success</AlertTitle>
     <AlertDescription>
       Your bootable USB drive has been created successfully. You can safely remove it now.
+    </AlertDescription>
+  </Alert>
+
+  <!-- Written, but the drive still needs the user's attention -->
+  <Alert v-else-if="hasWarnings" variant="warning">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+    <AlertTitle>Done, but not ejected</AlertTitle>
+    <AlertDescription>
+      <p v-for="warning in warnings" :key="warning">{{ warning }}</p>
     </AlertDescription>
   </Alert>
 

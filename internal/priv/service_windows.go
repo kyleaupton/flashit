@@ -4,6 +4,7 @@ package priv
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	"github.com/kyleaupton/flashit/internal/drives"
@@ -51,6 +52,9 @@ func (s *windowsService) Disk() DiskOps {
 	return windowsDiskOpsFallback{}
 }
 
+// Hold is a no-op: the Windows helper has no idle timeout.
+func (s *windowsService) Hold() func() { return func() {} }
+
 func (s *windowsService) Shutdown(ctx context.Context) error {
 	if s.client != nil {
 		return s.client.Shutdown(ctx)
@@ -83,6 +87,12 @@ func (d *windowsDiskOps) Eject(ctx context.Context, device string) error {
 	return drives.Eject(ctx, device)
 }
 
+func (d *windowsDiskOps) Unmount(ctx context.Context, device string) error {
+	return errUnmountUnsupported
+}
+
+var errUnmountUnsupported = errors.New("unmount is not supported by the Windows helper")
+
 // windowsDiskOpsFallback is used when the helper is not available.
 // These operations will fail since raw disk access requires elevation.
 type windowsDiskOpsFallback struct{}
@@ -97,4 +107,8 @@ func (d windowsDiskOpsFallback) FormatDisk(ctx context.Context, device string, f
 
 func (d windowsDiskOpsFallback) Eject(ctx context.Context, device string) error {
 	return drives.Eject(ctx, device)
+}
+
+func (d windowsDiskOpsFallback) Unmount(ctx context.Context, device string) error {
+	return errUnmountUnsupported
 }

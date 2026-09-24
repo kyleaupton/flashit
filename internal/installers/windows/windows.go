@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 
 	"github.com/kyleaupton/flashit/internal/core"
@@ -38,9 +39,10 @@ func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.
 	}
 
 	state := &winsteps.FlashContext{
-		ISOPath:    src.Path,
-		TargetDisk: drive.Device,
-		VolumeName: defaultVolumeName,
+		ISOPath:      src.Path,
+		TargetDisk:   drive.Device,
+		VolumeName:   defaultVolumeName,
+		HelperMounts: runtime.GOOS == "linux",
 	}
 
 	if !core.DryRun {
@@ -54,16 +56,10 @@ func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.
 		state.PrivService = svc
 	}
 
-	p := pipeline.New(
-		winsteps.OpenSource{},
-		winsteps.FormatUSB{},
-		winsteps.AnalyzeWim{},
-		winsteps.CopyFiles{},
-		winsteps.SplitWim{},
-		winsteps.Finalize{},
-	)
-
-	runnable := pipeline.Bind(p, state)
+	runnable := pipeline.Bind(pipeline.New(steps()...), state)
+	if state.PrivService != nil {
+		runnable = priv.HoldDuring(state.PrivService, runnable)
+	}
 
 	return &core.Plan{
 		ID:        "plan-windows",
@@ -71,4 +67,15 @@ func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.
 		Runnable:  runnable,
 		StepInfos: runnable.StepInfos(),
 	}, nil
+}
+
+func steps() []pipeline.Step[winsteps.FlashContext] {
+	return []pipeline.Step[winsteps.FlashContext]{
+		winsteps.OpenSource{},
+		winsteps.FormatUSB{},
+		winsteps.AnalyzeWim{},
+		winsteps.CopyFiles{},
+		winsteps.SplitWim{},
+		winsteps.Finalize{},
+	}
 }

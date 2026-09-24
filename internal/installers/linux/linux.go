@@ -55,6 +55,9 @@ func (l Linux) Plan(ctx context.Context, src sources.SourceInfo, drive drives.Dr
 	)
 
 	runnable := pipeline.Bind(p, state)
+	if state.PrivService != nil {
+		runnable = priv.HoldDuring(state.PrivService, runnable)
+	}
 
 	return &core.Plan{
 		ID:        "plan-linux",

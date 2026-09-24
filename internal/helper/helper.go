@@ -49,6 +49,19 @@ type Disk interface {
 	Eject(device string) error
 }
 
+// MountTable is implemented by a Disk whose Eject does not unmount on its
+// own (Linux). eject then unmounts every partition itself, removes the
+// directories format_disk mounted them on, and treats Eject as best effort,
+// since the device is safe to pull once nothing is mounted.
+type MountTable interface {
+	// Mounts lists where device, a whole disk or a partition, is mounted,
+	// as the OS mount table has it.
+	Mounts(device string) ([]string, error)
+	// RemoveMountDir removes dir only if it is an empty, unmounted, real
+	// directory directly under validate.MountRoot.
+	RemoveMountDir(dir string) error
+}
+
 // Peer is what caller authentication learned about the connected process.
 // Ops use it to refuse sources the caller could not read on their own.
 type Peer struct {

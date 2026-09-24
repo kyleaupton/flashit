@@ -45,7 +45,8 @@ type Installer interface {
 
 // Event types. "authorizing" is emitted by a step right before the
 // privileged call that raises the OS prompt, so the UI can say it is
-// waiting on the user rather than on the disk.
+// waiting on the user rather than on the disk. "warning" carries, in
+// Message, something the user must act on even though the job succeeded.
 const (
 	EventState       = "state"
 	EventStepStart   = "step-start"
@@ -53,6 +54,7 @@ const (
 	EventProgress    = "progress"
 	EventLog         = "log"
 	EventAuthorizing = "authorizing"
+	EventWarning     = "warning"
 )
 
 type Event struct {

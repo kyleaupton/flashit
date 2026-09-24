@@ -17,6 +17,9 @@ export const useJobStore = defineStore('job', () => {
   // Set while the OS is asking the user to approve the privileged step; the
   // drive is untouched until the first progress or step-end arrives.
   const isAuthorizing = ref(false)
+  // Things the user must still act on after a job that succeeded, such as a
+  // drive that could not be ejected because something had it open.
+  const warnings = ref<string[]>([])
   const steps = ref<StepState[]>([])
 
   let eventUnsubscribe: (() => void) | null = null
@@ -78,7 +81,11 @@ export const useJobStore = defineStore('job', () => {
           isCancelling.value = false
         }
 
-        if (event.message === 'succeeded') {
+        if (event.message === 'succeeded' && warnings.value.length > 0) {
+          toast.warning('Flash complete, but the drive was not ejected', {
+            description: warnings.value.join(' '),
+          })
+        } else if (event.message === 'succeeded') {
           toast.success('Flash complete!', {
             description: 'Your bootable drive is ready to use.',
           })
@@ -115,6 +122,13 @@ export const useJobStore = defineStore('job', () => {
 
       case 'authorizing': {
         isAuthorizing.value = true
+        break
+      }
+
+      case 'warning': {
+        if (event.message && !warnings.value.includes(event.message)) {
+          warnings.value.push(event.message)
+        }
         break
       }
 
@@ -160,6 +174,7 @@ export const useJobStore = defineStore('job', () => {
     errorCode.value = null
     status.value = null
     isAuthorizing.value = false
+    warnings.value = []
     steps.value = []
     pendingEvents = []
 
@@ -222,6 +237,7 @@ export const useJobStore = defineStore('job', () => {
     error.value = null
     errorCode.value = null
     isAuthorizing.value = false
+    warnings.value = []
     steps.value = []
   }
 
@@ -234,6 +250,7 @@ export const useJobStore = defineStore('job', () => {
     isStarting.value = false
     isCancelling.value = false
     isAuthorizing.value = false
+    warnings.value = []
     steps.value = []
     pendingEvents = []
   }
@@ -246,6 +263,7 @@ export const useJobStore = defineStore('job', () => {
     isStarting,
     isCancelling,
     isAuthorizing,
+    warnings,
     steps,
     tccDenied,
     isRunning,
