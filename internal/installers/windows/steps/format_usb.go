@@ -41,3 +41,18 @@ func (FormatUSB) Run(ctx context.Context, state *FlashContext, e core.Executor) 
 	e.Emit(core.Event{Type: "log", Message: fmt.Sprintf("USB mounted at %s", mountPoint)})
 	return nil
 }
+
+// Cleanup unmounts a volume the helper mounted, so a failed or cancelled job
+// never leaves the stick mounted as root. Cleanups run in reverse, so
+// SplitWim has removed its parts from the volume by now.
+func (FormatUSB) Cleanup(ctx context.Context, state *FlashContext, e core.Executor) error {
+	if core.DryRun || !state.HelperMounts || state.PrivService == nil {
+		return nil
+	}
+	e.Emit(core.Event{Type: core.EventLog, Message: "Unmounting USB..."})
+	if err := state.PrivService.Disk().Unmount(ctx, state.TargetDisk); err != nil {
+		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: unmount failed: " + err.Error()})
+		return err
+	}
+	return nil
+}

@@ -6,6 +6,7 @@ import (
 
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/pipeline"
+	"github.com/kyleaupton/flashit/internal/priv"
 )
 
 // Eject ejects the target disk after writing is complete.
@@ -20,14 +21,21 @@ func (Eject) Run(ctx context.Context, state *FlashContext, e core.Executor) erro
 		return pipeline.Simulate(ctx, e, 500*time.Millisecond, 2)
 	}
 
-	e.Emit(core.Event{Type: "log", Message: "Ejecting disk..."})
+	e.Emit(core.Event{Type: core.EventLog, Message: "Ejecting disk..."})
 
-	if err := state.PrivService.Disk().Eject(ctx, state.TargetDisk); err != nil {
-		// Eject failure is not fatal - just log it
-		e.Emit(core.Event{Type: "log", Message: "Warning: eject failed: " + err.Error()})
-		return nil
+	// Eject failure is not fatal: the image is written. A volume that could
+	// not be unmounted is the user's to release, so that one is a warning.
+	err := state.PrivService.Disk().Eject(ctx, state.TargetDisk)
+	switch {
+	case err == nil:
+		e.Emit(core.Event{Type: core.EventLog, Message: "Disk ejected"})
+	case priv.IsDeviceBusy(err):
+		e.Emit(core.Event{Type: core.EventWarning, Message: busyWarning})
+	default:
+		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: eject failed: " + err.Error()})
 	}
-
-	e.Emit(core.Event{Type: "log", Message: "Disk ejected"})
 	return nil
 }
+
+const busyWarning = "The image was written, but the stick is still in use and could not be ejected. " +
+	"Close anything using it, then eject it before removing it."
