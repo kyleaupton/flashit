@@ -394,7 +394,7 @@ func (sess *session) eject(ctx context.Context, p proto.EjectParams) error {
 		return err
 	}
 	if err := sess.s.disk.Eject(info.Path); err != nil {
-		sess.s.opts.Logger.Warn("eject failed after unmounting; the device is safe to remove", "device", info.Path, "error", err)
+		sess.s.opts.Logger.Warn("eject failed after unmounting", "device", info.Path, "error", err)
 	}
 	return nil
 }

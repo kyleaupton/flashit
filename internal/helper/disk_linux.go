@@ -281,20 +281,22 @@ func waitForPath(ctx context.Context, path string, timeout time.Duration) error 
 	}
 }
 
-// Eject flushes, asks the kernel to re-read the new partition table, and
-// spins the device down with eject(1) when it is installed. The eject op has
-// unmounted everything by then, so none of this is needed for a safe pull.
+// Eject flushes and, when eject(1) is installed, asks the kernel to re-read
+// the partition table and spins the device down. Without eject(1) the
+// re-read is skipped: it re-announces the partitions, which a desktop
+// automounter may mount again. The eject op has unmounted everything by
+// then, so none of this is needed for a safe pull.
 func (d *linuxDisk) Eject(device string) error {
 	unix.Sync()
+	if _, err := exec.LookPath("eject"); err != nil {
+		d.log.Info("eject not installed, leaving the unmounted device attached", "device", device)
+		return nil
+	}
 	if f, err := os.OpenFile(device, os.O_RDONLY|unix.O_NONBLOCK, 0); err == nil {
 		if _, err := unix.IoctlRetInt(int(f.Fd()), blkRRPart); err != nil {
 			d.log.Warn("re-read partition table", "device", device, "error", err)
 		}
 		f.Close()
-	}
-	if _, err := exec.LookPath("eject"); err != nil {
-		d.log.Info("eject not installed, leaving the unmounted device attached", "device", device)
-		return nil
 	}
 	return run(context.Background(), d.log, "eject", device)
 }

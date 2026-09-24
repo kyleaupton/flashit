@@ -157,7 +157,8 @@ later step fails; the failing step cleans up after itself (the WIM split
 removes the `.swm` parts it wrote to the volume). `warning` carries text in
 `Message` the user must act on although the job succeeded: an eject that
 the helper answered `device_busy` (the files are written but something
-holds the stick). The job store collects warnings per job, and a succeeded
+holds the stick), or on Linux any failed eject of the volume the helper
+mounted. The job store collects warnings per job, and a succeeded
 job with warnings gets `toast.warning` and a warning alert in the done
 view.
 
@@ -222,14 +223,15 @@ and ZFS roots through the mount source), fail closed. The caller's
 directory the app creates. `eject` and `unmount` by device only act on a
 target that passed the same gate as a write, and unmount every partition
 and the disk (mounts matched by major:minor from `/proc/self/mountinfo`),
-retrying EBUSY five times a second apart before answering `device_busy`.
+trying five times a second apart on EBUSY before answering `device_busy`.
 They then remove the directories that device was mounted on, found in the
 mount table before unmounting and never taken from the request: only
 `MountRoot/<valid label>`, only if `Lstat` shows a real directory (not a
 symlink) on the same filesystem as `MountRoot` (no longer a mountpoint), and
-only by `rmdir`. `eject` then syncs, re-reads the partition table and runs
-`eject(1)` if installed; once the unmount worked, a failure there is only
-logged.
+only by `rmdir`. `eject` then syncs and, if `eject(1)` is installed,
+re-reads the partition table and runs it (without it the re-read is skipped,
+since it can make the desktop automount the stick again); once the unmount
+worked, a failure there is only logged.
 
 macOS: nothing runs as root and there is no daemon, socket file or peer
 check; the helper is the app's own child on an inherited socketpair, so the

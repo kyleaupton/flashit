@@ -35,12 +35,17 @@ func (Finalize) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 	return nil
 }
 
-const busyWarning = "All files were written, but the stick is still in use and could not be ejected. " +
-	"Close anything using it, then eject it before removing it."
+const (
+	busyWarning = "All files were written, but the stick is still in use and could not be ejected. " +
+		"Close anything using it, then eject it before removing it."
+	ejectWarning = "All files were written, but the stick could not be ejected. " +
+		"Eject it before removing it."
+)
 
 // ejectThroughHelper leaves the job succeeded whatever happens: the files
-// are on the stick. A stick the helper could not unmount is the user's to
-// release, so that one is a warning rather than a log line.
+// are on the stick. Any failure is a warning, since only the helper can
+// unmount the volume it mounted as root; device_busy gets the copy that
+// tells the user what to close.
 func ejectThroughHelper(ctx context.Context, state *FlashContext, e core.Executor) {
 	err := state.PrivService.Disk().Eject(ctx, state.TargetDisk)
 	switch {
@@ -49,6 +54,7 @@ func ejectThroughHelper(ctx context.Context, state *FlashContext, e core.Executo
 	case priv.IsDeviceBusy(err):
 		e.Emit(core.Event{Type: core.EventWarning, Message: busyWarning})
 	default:
-		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: eject failed: " + err.Error()})
+		e.Emit(core.Event{Type: core.EventLog, Message: "Eject failed: " + err.Error()})
+		e.Emit(core.Event{Type: core.EventWarning, Message: ejectWarning})
 	}
 }

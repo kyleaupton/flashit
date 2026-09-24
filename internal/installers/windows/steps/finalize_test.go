@@ -28,11 +28,11 @@ func TestFinalizeEjectsThroughHelper(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		err  error
-		warn bool
+		warn string
 	}{
-		{"ejected", nil, false},
-		{"busy", proto.NewError(proto.CodeDeviceBusy, "unmount /dev/sdb1: device or resource busy"), true},
-		{"other", errors.New("helper connection lost"), false},
+		{"ejected", nil, ""},
+		{"busy", proto.NewError(proto.CodeDeviceBusy, "unmount /dev/sdb1: device or resource busy"), busyWarning},
+		{"other", errors.New("helper connection lost"), ejectWarning},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &privtest.Service{Ops: privtest.Ops{EjectErr: tc.err}}
@@ -45,11 +45,8 @@ func TestFinalizeEjectsThroughHelper(t *testing.T) {
 				t.Fatalf("ejected %v", svc.Ops.Ejected)
 			}
 			w := ev.warnings()
-			if tc.warn != (len(w) == 1) || len(w) > 1 {
-				t.Fatalf("warnings %q", w)
-			}
-			if tc.warn && w[0] != busyWarning {
-				t.Fatalf("warning %q", w[0])
+			if (tc.warn == "") != (len(w) == 0) || len(w) > 1 || (len(w) == 1 && w[0] != tc.warn) {
+				t.Fatalf("warnings %q, want %q", w, tc.warn)
 			}
 		})
 	}
