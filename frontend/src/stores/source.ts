@@ -1,7 +1,6 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { Events } from '@wailsio/runtime'
-import { toast } from 'vue-sonner'
 import { Probe } from '@flashit/service/sourcesservice'
 import { formatSize } from '@/lib/utils'
 import { SourceKind } from '@/types'
@@ -10,9 +9,12 @@ import type { SourceInfo } from '@/types'
 export const useSourceStore = defineStore('source', () => {
   const source = ref<SourceInfo | null>(null)
   const isAnalyzing = ref(false)
+  // Why the last pick or drop was not taken; shown in the dropzone.
   const error = ref<string | null>(null)
 
   let dropUnsubscribe: (() => void) | null = null
+  // Two quick drops probe concurrently; only the latest result may land.
+  let probeToken = 0
 
   const hasSource = computed(() => source.value !== null)
   const filename = computed(() => source.value?.path.split('/').pop() ?? null)
@@ -34,16 +36,20 @@ export const useSourceStore = defineStore('source', () => {
   )
 
   async function setSource(path: string): Promise<void> {
+    const token = ++probeToken
     isAnalyzing.value = true
     error.value = null
 
     try {
-      source.value = await Probe(path)
+      const info = await Probe(path)
+      if (token !== probeToken) return
+      source.value = info
     } catch (e) {
+      if (token !== probeToken) return
       error.value = e instanceof Error ? e.message : 'Failed to read the image'
       source.value = null
     } finally {
-      isAnalyzing.value = false
+      if (token === probeToken) isAnalyzing.value = false
     }
   }
 
@@ -59,7 +65,7 @@ export const useSourceStore = defineStore('source', () => {
     dropUnsubscribe = Events.On('files:dropped', (ev: Events.WailsEvent) => {
       const files = (ev.data as { files?: string[] })?.files ?? []
       if (files.length !== 1) {
-        toast.warning('Drop one image file')
+        error.value = 'Drop one image file'
         return
       }
       setSource(files[0])

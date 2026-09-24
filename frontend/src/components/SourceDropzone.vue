@@ -15,6 +15,7 @@ const filename = computed(() => sourceStore.filename)
 const kindLabel = computed(() => sourceStore.kindLabel)
 const fileSize = computed(() => sourceStore.fileSizeFormatted)
 const isAnalyzing = computed(() => sourceStore.isAnalyzing)
+const error = computed(() => sourceStore.error)
 const isUnknown = computed(() => source.value?.kind === SourceKind.Unknown)
 
 const badgeClass = computed(() => {
@@ -74,6 +75,7 @@ async function handleBrowse() {
       </div>
       <p class="dropzone-text">Drop an ISO here or click to select</p>
       <p class="dropzone-hint">Any hybrid Linux ISO, or a Windows ISO</p>
+      <p v-if="error" class="reason">{{ error }}</p>
       <div class="format-chips">
         <span class="format-chip">.iso</span>
         <span class="format-chip">.img</span>
@@ -126,6 +128,7 @@ async function handleBrowse() {
         <p v-if="isUnknown" class="reason">
           Cannot flash this image: {{ source.reason }}.
         </p>
+        <p v-if="error" class="reason">{{ error }}</p>
       </div>
     </CardContent>
   </Card>

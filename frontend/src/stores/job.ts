@@ -48,6 +48,12 @@ export const useJobStore = defineStore('job', () => {
   }
 
   function processJobEvent(event: JobEvent): void {
+    // The prompt is over once the step produces anything else: a log line
+    // after the privileged call returns, progress, or its end.
+    if (event.type !== 'authorizing') {
+      isAuthorizing.value = false
+    }
+
     switch (event.type) {
       case 'state': {
         const stateMap: Record<string, Status> = {
@@ -70,7 +76,6 @@ export const useJobStore = defineStore('job', () => {
 
         if (event.message === 'cancelled' || event.message === 'succeeded' || event.message === 'failed') {
           isCancelling.value = false
-          isAuthorizing.value = false
         }
 
         if (event.message === 'succeeded') {
@@ -100,7 +105,6 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'step-end': {
-        isAuthorizing.value = false
         const step = steps.value.find((s) => s.key === event.step)
         if (step) {
           step.status = event.error ? 'failed' : 'completed'
@@ -115,7 +119,6 @@ export const useJobStore = defineStore('job', () => {
       }
 
       case 'progress': {
-        isAuthorizing.value = false
         const runningStep = steps.value.find((s) => s.status === 'running')
         if (runningStep) {
           runningStep.progress = event.percent
