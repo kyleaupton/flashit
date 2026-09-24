@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=FlashIt
+GenericName=USB Installer Writer
+Comment=Write bootable USB installers from ISO images
+Exec=flashit
+Icon=flashit
+Terminal=false
+Categories=Utility;System;
+Keywords=usb;iso;bootable;flash;installer;
