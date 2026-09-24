@@ -3,24 +3,20 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
+
 	"github.com/kyleaupton/flashit/internal/core"
+	"github.com/kyleaupton/flashit/internal/drives"
 	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/installers/linux"
 	"github.com/kyleaupton/flashit/internal/installers/windows"
 	"github.com/kyleaupton/flashit/internal/jobs"
-	"os"
+	"github.com/kyleaupton/flashit/internal/sources"
 )
 
-type InstallerMeta struct {
-	ID      string
-	Name    string
-	Targets []core.Target
-}
-
 type StartJobRequest struct {
-	InstallerID string
-	SourceLocal string
-	DriveID     string
+	SourcePath string
+	DriveID    string
 }
 
 type StartJobResponse struct {
@@ -30,47 +26,47 @@ type StartJobResponse struct {
 
 type JobsService struct {
 	mgr        *jobs.Manager
-	installers map[string]core.Installer
+	installers map[sources.Kind]core.Installer
 }
 
 func NewJobsService() *JobsService {
 	svc := &JobsService{
-		installers: map[string]core.Installer{},
+		installers: map[sources.Kind]core.Installer{
+			sources.LinuxISO:   linux.Linux{},
+			sources.WindowsISO: windows.Windows{},
+		},
 	}
-	// register generic Linux installer
-	l := linux.Linux{}
-	svc.installers[l.ID()] = l
-
-	// register Windows installer
-	w := windows.Windows{}
-	svc.installers[w.ID()] = w
-
 	svc.mgr = jobs.NewManager(func(ev core.Event) {
 		eventbus.Emit("job:event", ev)
 	})
 	return svc
 }
 
-func (s *JobsService) ListInstallers() []InstallerMeta {
-	out := []InstallerMeta{}
-	for _, inst := range s.installers {
-		out = append(out, InstallerMeta{ID: inst.ID(), Name: inst.Name(), Targets: inst.Targets()})
-	}
-	return out
-}
-
+// StartJob probes the source, picks the installer by what it found, and
+// refuses a drive the OS does not list as removable before planning.
 func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJobResponse, error) {
-	inst, ok := s.installers[req.InstallerID]
-	if !ok {
-		return StartJobResponse{}, errors.New("installer not found")
+	if req.SourcePath == "" {
+		return StartJobResponse{}, errors.New("source path is required")
 	}
-	if req.SourceLocal == "" {
-		return StartJobResponse{}, errors.New("source local path is required")
+	if req.DriveID == "" {
+		return StartJobResponse{}, errors.New("drive is required")
 	}
-	if _, err := os.Stat(req.SourceLocal); err != nil {
+
+	src, err := sources.Probe(req.SourcePath)
+	if err != nil {
 		return StartJobResponse{}, err
 	}
-	plan, err := inst.Plan(ctx, core.CreateRequest{Source: core.SourceSpec{Local: req.SourceLocal}, DriveID: req.DriveID})
+	inst, ok := s.installers[src.Kind]
+	if !ok {
+		return StartJobResponse{}, fmt.Errorf("cannot flash this image: %s", src.Reason)
+	}
+
+	drive, err := findRemovable(ctx, req.DriveID)
+	if err != nil {
+		return StartJobResponse{}, err
+	}
+
+	plan, err := inst.Plan(ctx, src, drive)
 	if err != nil {
 		return StartJobResponse{}, err
 	}
@@ -84,6 +80,19 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 		JobID:     jobID,
 		StepInfos: plan.StepInfos,
 	}, nil
+}
+
+func findRemovable(ctx context.Context, device string) (drives.Drive, error) {
+	removable, err := drives.ListRemovable(ctx)
+	if err != nil {
+		return drives.Drive{}, fmt.Errorf("failed to list removable drives: %w", err)
+	}
+	for _, d := range removable {
+		if d.Device == device {
+			return d, nil
+		}
+	}
+	return drives.Drive{}, fmt.Errorf("%s is not a removable drive", device)
 }
 
 // CancelJob cancels a running job by ID.

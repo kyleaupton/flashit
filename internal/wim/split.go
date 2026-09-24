@@ -10,9 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"time"
-
-	"github.com/kyleaupton/flashit/internal/fs"
 )
 
 // Progress contains information about the current split/copy operation.
@@ -434,64 +431,4 @@ func copyBlobData(ctx context.Context, src *os.File, dst *os.File, srcOffset int
 		}
 	}
 	return copied, nil
-}
-
-// CopySWMs copies install*.swm files from swmDir to <usbRoot>/sources/.
-// The callback receives (bytesWritten, totalBytes) and should return false to cancel.
-func CopySWMs(ctx context.Context, swmDir string, usbRoot string, cb func(done, total int64) bool) error {
-	srcs, err := filepath.Glob(filepath.Join(swmDir, "install*.swm"))
-	if err != nil {
-		return err
-	}
-	if len(srcs) == 0 {
-		return fmt.Errorf("no .swm parts found in %s", swmDir)
-	}
-
-	dstDir := filepath.Join(usbRoot, "sources")
-	if err := os.MkdirAll(dstDir, 0o755); err != nil {
-		return err
-	}
-
-	// Calculate total size
-	var total int64
-	for _, s := range srcs {
-		fi, err := os.Stat(s)
-		if err != nil {
-			return err
-		}
-		total += fi.Size()
-	}
-
-	var done int64
-	for _, s := range srcs {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		base := filepath.Base(s)
-		dst := filepath.Join(dstDir, base)
-
-		fileInfo, err := os.Stat(s)
-		if err != nil {
-			return err
-		}
-		fileSize := fileInfo.Size()
-
-		err = fs.CopyFile(ctx, s, dst, fs.CopyFileOptions{
-			SyncAfter:        true,
-			ProgressInterval: 250 * time.Millisecond,
-		}, func(p fs.CopyProgress) bool {
-			if cb != nil {
-				return cb(done+p.Written, total)
-			}
-			return true
-		})
-		if err != nil {
-			return err
-		}
-		done += fileSize
-	}
-	return nil
 }

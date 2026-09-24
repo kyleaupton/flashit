@@ -24,6 +24,7 @@ func (FormatUSB) Run(ctx context.Context, state *FlashContext, e core.Executor) 
 
 	e.Emit(core.Event{Type: "log", Message: "Formatting USB as FAT32..."})
 
+	e.Emit(core.Event{Type: core.EventAuthorizing})
 	if err := state.PrivService.Disk().FormatDisk(ctx, state.TargetDisk, "FAT32", state.VolumeName); err != nil {
 		return fmt.Errorf("failed to format USB: %w", err)
 	}
