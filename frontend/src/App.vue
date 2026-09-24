@@ -95,6 +95,7 @@ onMounted(() => {
             :status="appStore.state"
             :error="jobStore.error"
             :error-code="jobStore.errorCode"
+            :warnings="jobStore.warnings"
             @open-settings="OpenPrivacySettings()"
             @retry="handleStartJob"
           />

@@ -19,7 +19,7 @@ export enum Status {
 /** Event payload from backend job:event emissions */
 export interface JobEvent {
   jobId: string
-  type: 'state' | 'step-start' | 'step-end' | 'progress' | 'log' | 'error' | 'authorizing'
+  type: 'state' | 'step-start' | 'step-end' | 'progress' | 'log' | 'error' | 'authorizing' | 'warning'
   message: string
   step: string
   percent: number
