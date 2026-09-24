@@ -38,12 +38,13 @@ and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 main.go, version.go          Wails app entry point, service registration
 internal/core/               Shared contracts: Plan, Runnable, Event, Installer
 internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
-internal/jobs/               Job manager: enqueue, run, cancel
-internal/service/            Wails services: JobsService, DrivesService, PrivService
+internal/jobs/               Job manager: enqueue (one job at a time), run, cancel
+internal/service/            Wails services: JobsService, DrivesService, SourcesService, PrivService
+internal/sources/            Pure-Go image probe: ISO 9660 PVD and directory tree (Joliet first), UDF tree, MBR signature; derives the source kind
 internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
-internal/iso/                Hybrid ISO validation and ISO mounting per OS
+internal/iso/                ISO mounting per OS
 internal/wim/                WIM reader, splitter, lzx/ decompressor
 internal/fs/                 File copy
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
@@ -65,7 +66,7 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
 task build                # build for the host OS into bin/
 task darwin:package       # release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
-go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/iso, internal/drives (linux-only)
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/drives (linux-only)
 GOOS=linux go build ./cmd/flashit-helper   # cross-compile the Go helper; `task linux:build:helper` puts it in bin/helpers/
 wails3 generate bindings -ts      # regenerate frontend/bindings after changing a service
 cd frontend && npm run build      # main.go embeds frontend/dist, so build it before any go build
@@ -98,12 +99,19 @@ The Windows installer is unavailable on a Linux host because
 
 ## Job execution flow
 
-`JobsService.StartJob` looks up the installer, calls `installer.Plan`, which
-validates the source and drive and returns a `core.Plan` wrapping a bound
-`pipeline.Pipeline`. `jobs.Manager.Enqueue` stores the job and runs it on a
-cancellable background context. Steps emit through `core.Executor`, the manager
-forwards to `eventbus.Emit("job:event", ev)`, and Wails delivers it to the
-frontend, where `frontend/src/stores/job.ts` subscribes with `Events.On('job:event', ...)`.
+The source kind is probed, never chosen by the user (decision 005).
+`SourcesService.Probe` runs when a file is picked or dropped so the UI can
+show the label, size and kind, or the reason an image is unusable.
+`JobsService.StartJob(SourcePath, DriveID)` probes again, refuses an
+`Unknown` image with its reason, picks the installer by kind, resolves the
+drive from `drives.ListRemovable` (refusing one not listed) and calls
+`installer.Plan(ctx, SourceInfo, Drive)`, which returns a `core.Plan`
+wrapping a bound `pipeline.Pipeline`. `jobs.Manager.Enqueue` refuses with
+`ErrJobActive` while a job is pending or running, otherwise stores the job
+and runs it on a cancellable background context. Steps emit through
+`core.Executor`, the manager forwards to `eventbus.Emit("job:event", ev)`,
+and Wails delivers it to the frontend, where `frontend/src/stores/job.ts`
+subscribes with `Events.On('job:event', ...)`.
 
 ```go
 type Event struct {
@@ -116,18 +124,32 @@ type Event struct {
 }
 ```
 
-The backend emits `Type` values `state`, `step-start`, `step-end`, `progress`
-and `log`; a failure arrives as a `state` event with `Error` set. A pipeline
-step that implements `CleanupStep` is cleaned up in reverse order when a later
-step fails.
+The backend emits `Type` values `state`, `step-start`, `step-end`, `progress`,
+`log` and `authorizing`; a failure arrives as a `state` event with `Error`
+set and `Code` when the helper refused. `authorizing` is emitted by the write
+and format steps right before the privileged call that raises the OS prompt,
+and the frontend clears it on the next `progress` or `step-end`. A pipeline
+step that implements `CleanupStep` is cleaned up in reverse order when a
+later step fails; the failing step cleans up after itself (the WIM split
+removes the `.swm` parts it wrote to the volume).
+
+Wails only delivers `WindowFilesDropped` to Go listeners, so `main.go`
+relays dropped paths to the frontend as a `files:dropped` event.
+
+The frontend state machine lives in `frontend/src/stores/app.ts`:
+`idle -> source-probed -> target-selected -> running -> done | failed |
+cancelled`, with `authorizing` as a substate of `running` on the job store.
 
 ## Safety rules
 
-Both installers refuse a target whose ID ends in `disk0`, and require the device
-to appear in `drives.ListRemovable`. Enforced in `Plan`:
+`JobsService.StartJob` requires the device to appear in
+`drives.ListRemovable`. Both installers refuse a target whose ID ends in
+`disk0` and an image larger than the drive, in `Plan`:
 `internal/installers/linux/linux.go` and
-`internal/installers/windows/windows.go`. Both checks are skipped when
-`core.DryRun` is set (`DRY_RUN=1`), which also swaps in `drives.MockProvider`.
+`internal/installers/windows/windows.go`. The `disk0` check and the
+privileged-service setup are skipped when `core.DryRun` is set (`DRY_RUN=1`),
+which also swaps in `drives.MockProvider` and lets any readable file, even
+one that probes as `Unknown`, run the Linux installer's simulated pipeline.
 
 The Go helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block

@@ -35,6 +35,7 @@ func (Write) Run(ctx context.Context, state *FlashContext, e core.Executor) erro
 		}
 	}
 
+	e.Emit(core.Event{Type: core.EventAuthorizing})
 	if err := state.PrivService.Disk().WriteISO(ctx, state.ISOPath, state.TargetDisk, progress); err != nil {
 		return fmt.Errorf("failed to write ISO: %w", err)
 	}

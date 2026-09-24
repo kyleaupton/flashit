@@ -27,11 +27,11 @@ type Step[C any] interface {
 }
 
 // CleanupStep is a step that can clean up resources on failure.
-// Cleanup is called in reverse order when a subsequent step fails.
+// Cleanup is called in reverse order, starting with the step that failed,
+// so it must cope with its own Run having stopped part way.
 type CleanupStep[C any] interface {
 	Step[C]
 	// Cleanup releases resources allocated by this step.
-	// Called only when a later step fails.
 	Cleanup(ctx context.Context, state *C, e core.Executor) error
 }
 
@@ -59,7 +59,7 @@ func (p *Pipeline[C]) StepInfos() []core.StepInfo {
 }
 
 // Run executes all steps in sequence, running cleanup on failure.
-// Cleanup steps are called in reverse order (from the step before the failing one back to the first).
+// Cleanup steps are called in reverse order, from the failing step back to the first.
 func (p *Pipeline[C]) Run(ctx context.Context, state *C, e core.Executor) error {
 	for i, s := range p.steps {
 		logger.Debug("step starting", "step", s.Name(), "key", s.Key(), "index", i)
@@ -68,8 +68,7 @@ func (p *Pipeline[C]) Run(ctx context.Context, state *C, e core.Executor) error 
 		if err := s.Run(ctx, state, e); err != nil {
 			logger.Error("step failed", "step", s.Name(), "key", s.Key(), "error", err)
 
-			// Run cleanup for all previously completed steps in reverse order
-			p.runCleanup(ctx, state, e, i-1)
+			p.runCleanup(ctx, state, e, i)
 
 			e.Emit(core.Event{Type: "step-end", Step: s.Key(), Error: err.Error()})
 			return fmt.Errorf("step %q failed: %w", s.Name(), err)

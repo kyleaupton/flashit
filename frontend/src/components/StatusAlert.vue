@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 const props = defineProps<{
   status: AppState
   error?: string | null
-  tccDenied?: boolean
+  errorCode?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -17,10 +17,36 @@ const emit = defineEmits<{
 
 const showDetails = ref(false)
 
-const isSuccess = computed(() => props.status === 'complete')
+// Copy for the helper's closed error codes. Anything else gets the generic
+// line with the raw message behind a disclosure.
+const codeCopy: Record<string, { title: string; text: string }> = {
+  cancelled: {
+    title: 'Not authorized',
+    text: 'The authorization prompt was dismissed, so nothing was written to the drive.',
+  },
+  not_removable: {
+    title: 'Drive refused',
+    text: 'The system does not report this drive as removable, so FlashIt will not write to it.',
+  },
+  system_disk: {
+    title: 'Drive refused',
+    text: 'This drive holds the running system, so FlashIt will not write to it.',
+  },
+  insufficient_capacity: {
+    title: 'Drive too small',
+    text: 'The image is larger than the drive.',
+  },
+  device_busy: {
+    title: 'Drive in use',
+    text: 'Something else is using the drive. Close anything that has it open, or unplug and reinsert it, then try again.',
+  },
+}
+
+const isSuccess = computed(() => props.status === 'done')
 const isCancelled = computed(() => props.status === 'cancelled')
-const isTccDenied = computed(() => props.status === 'error' && props.tccDenied)
-const isError = computed(() => props.status === 'error' && !props.tccDenied)
+const isTccDenied = computed(() => props.status === 'failed' && props.errorCode === 'tcc_denied')
+const isError = computed(() => props.status === 'failed' && !isTccDenied.value)
+const copy = computed(() => (props.errorCode && codeCopy[props.errorCode]) || null)
 </script>
 
 <template>
@@ -116,9 +142,9 @@ const isError = computed(() => props.status === 'error' && !props.tccDenied)
       <line x1="12" x2="12" y1="8" y2="12" />
       <line x1="12" x2="12.01" y1="16" y2="16" />
     </svg>
-    <AlertTitle>Error</AlertTitle>
+    <AlertTitle>{{ copy?.title ?? 'Error' }}</AlertTitle>
     <AlertDescription>
-      <span>An error occurred while creating the bootable drive.</span>
+      <span>{{ copy?.text ?? 'An error occurred while creating the bootable drive.' }}</span>
       <button
         v-if="error"
         class="details-toggle"

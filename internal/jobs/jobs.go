@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/logger"
 	"github.com/kyleaupton/flashit/internal/proto"
@@ -28,6 +30,11 @@ type Job struct {
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
+
+// ErrJobActive is returned by Enqueue while a job is pending or running.
+// The helper serves one op at a time and the UI shows one job, so a second
+// one is refused rather than queued.
+var ErrJobActive = errors.New("a job is already running")
 
 type Manager struct {
 	mu          sync.Mutex
@@ -73,21 +80,40 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
+// Active reports whether a job is pending or running.
+func (m *Manager) Active() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.active()
+}
+
+func (m *Manager) active() bool {
+	for _, j := range m.jobs {
+		if j.Status == StatusPending || j.Status == StatusRunning {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) {
 	if plan == nil || plan.Runnable == nil {
 		return "", errors.New("plan has no runnable pipeline")
 	}
 
-	// Create a cancellable context for this job
-	// We don't use the passed ctx directly because it may be cancelled when the RPC returns
+	// The passed ctx may be cancelled when the RPC returns; the job outlives it.
 	jobCtx, cancel := context.WithCancel(context.Background())
 
 	m.mu.Lock()
-	id := time.Now().Format("20060102150405.000")
+	defer m.mu.Unlock()
+	if m.active() {
+		cancel()
+		return "", ErrJobActive
+	}
+	id := uuid.NewString()
 	job := &Job{ID: id, Plan: plan, Status: StatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now()}
 	m.jobs[id] = job
 	m.cancelFuncs[id] = cancel
-	m.mu.Unlock()
 
 	go m.run(jobCtx, job)
 	return id, nil

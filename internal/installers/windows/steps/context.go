@@ -19,5 +19,4 @@ type FlashContext struct {
 	USBMountPath   string           // Path where USB is mounted (set by FormatUSB)
 	InstallWimPath string           // Path to install.wim (set by AnalyzeWim)
 	NeedsSplit     bool             // Whether install.wim exceeds FAT32 limit (set by AnalyzeWim)
-	SWMTempDir     string           // Temp directory for split WIM files (set by SplitWim)
 }

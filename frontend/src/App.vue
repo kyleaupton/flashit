@@ -1,8 +1,7 @@
 <script setup lang="ts">
-import { onMounted, computed } from 'vue'
+import { onMounted } from 'vue'
 import { useColorMode } from '@vueuse/core'
-import { useDrivesStore, useSourceStore, useJobStore } from '@/stores'
-import type { AppState } from '@/types'
+import { useDrivesStore, useSourceStore, useJobStore, useAppStore } from '@/stores'
 import { Button } from '@/components/ui/button'
 import SourceDropzone from '@/components/SourceDropzone.vue'
 import DriveSelector from '@/components/DriveSelector.vue'
@@ -14,49 +13,26 @@ import { OpenPrivacySettings } from '@flashit/service/privservice'
 import { toast } from 'vue-sonner'
 import 'vue-sonner/style.css'
 
-
-// Initialize stores
 const drivesStore = useDrivesStore()
 const sourceStore = useSourceStore()
 const jobStore = useJobStore()
+const appStore = useAppStore()
 
-// Combine store states into overall app state
-const appState = computed((): AppState => {
-  if (jobStore.isFailed || jobStore.error) return 'error'
-  if (jobStore.isRunning || jobStore.isPending) return 'in-progress'
-  if (jobStore.isCancelled) return 'cancelled'
-  if (jobStore.isComplete) return 'complete'
-  if (sourceStore.hasSource && drivesStore.selectedDrive) return 'ready'
-  if (sourceStore.hasSource) return 'source-only'
-  return 'empty'
-})
-
-// Show the selection panels (source + drive) vs centered progress/status view
-const showSelectionView = computed(() => {
-  return !['in-progress', 'complete', 'cancelled', 'error'].includes(appState.value)
-})
-
-// Start job handler
 async function handleStartJob() {
-  if (!sourceStore.source || !drivesStore.selectedDrive || !sourceStore.detectedInstaller) {
-    toast.warning('Please select a source and drive')
-    return
-  }
+  if (!sourceStore.source || !drivesStore.selectedDrive) return
 
   try {
     await jobStore.startJob({
-      InstallerID: sourceStore.detectedInstaller.ID,
-      SourceLocal: sourceStore.source.path,
+      SourcePath: sourceStore.source.path,
       DriveID: drivesStore.selectedDrive.Device,
     })
   } catch (e) {
-    toast.error('Failed to start job', {
+    toast.error('Could not start', {
       description: e instanceof Error ? e.message : String(e),
     })
   }
 }
 
-// Reset to start over
 function handleReset() {
   jobStore.clearCurrentJob()
   sourceStore.clearSource()
@@ -65,10 +41,10 @@ function handleReset() {
 
 onMounted(() => {
   const mode = useColorMode()
-  mode.value = 'dark';
+  mode.value = 'dark'
 
   drivesStore.startAutoRefresh()
-  sourceStore.loadInstallers()
+  sourceStore.subscribeToDrops()
   jobStore.subscribeToEvents()
 })
 </script>
@@ -82,7 +58,7 @@ onMounted(() => {
     <Toaster position="bottom-center" />
 
     <!-- Selection View: Source + Drive panels -->
-    <main v-if="showSelectionView" class="flex-1 flex flex-col justify-between px-4 pb-4 min-h-0">
+    <main v-if="appStore.isSelecting" class="flex-1 flex flex-col justify-between px-4 pb-4 min-h-0">
       <div
         class="flex gap-4 w-full mx-auto transition-all duration-400 ease-out min-h-0"
         :class="sourceStore.hasSource ? 'max-w-[800px]' : 'max-w-[500px]'"
@@ -91,20 +67,19 @@ onMounted(() => {
           <SourceDropzone />
         </div>
         <Transition name="slide-in">
-          <div v-if="sourceStore.hasSource" class="flex-1 min-w-0 min-h-0 flex flex-col">
+          <div v-if="sourceStore.isUsable" class="flex-1 min-w-0 min-h-0 flex flex-col">
             <DriveSelector />
           </div>
         </Transition>
       </div>
 
-      <!-- Flash Button (shown when source selected, disabled until drive selected) -->
       <div
         v-if="sourceStore.hasSource"
         class="w-full max-w-[800px] mx-auto mt-4"
       >
         <FlashButton
           :loading="jobStore.isStarting"
-          :disabled="appState !== 'ready'"
+          :disabled="!appStore.canFlash"
           @click="handleStartJob"
         />
       </div>
@@ -113,13 +88,13 @@ onMounted(() => {
     <!-- Progress/Status View: Centered -->
     <main v-else class="flex-1 flex flex-col items-center justify-center px-4 pb-4">
       <div class="w-full max-w-[400px] flex flex-col gap-6">
-        <ProgressPanel v-if="appState === 'in-progress'" />
+        <ProgressPanel v-if="appStore.state === 'running'" />
 
-        <template v-if="appState === 'complete' || appState === 'cancelled' || appState === 'error'">
+        <template v-if="appStore.isFinished">
           <StatusAlert
-            :status="appState"
+            :status="appStore.state"
             :error="jobStore.error"
-            :tcc-denied="jobStore.tccDenied"
+            :error-code="jobStore.errorCode"
             @open-settings="OpenPrivacySettings()"
             @retry="handleStartJob"
           />
