@@ -15,6 +15,8 @@ import (
 
 const (
 	installedHelper = "/usr/libexec/flashit/flashit-helper"
+	// Absolute so a PATH entry the user controls cannot stand in for it.
+	pkexec = "/usr/bin/pkexec"
 	// The polkit dialog blocks until the user answers; give them a while.
 	spawnTimeout = 2 * time.Minute
 	// The helper's default -idle, which the app does not override, plus a
@@ -40,7 +42,7 @@ func spawnHelper(ctx context.Context) (*helperProcess, error) {
 	}
 	socket := filepath.Join(dir, "helper.sock")
 
-	cmd := exec.Command("pkexec", path, "-socket", socket)
+	cmd := exec.Command(pkexec, path, "-socket", socket)
 	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	if err := cmd.Start(); err != nil {
