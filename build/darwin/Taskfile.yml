@@ -224,11 +224,12 @@ tasks:
       # has Terminal as its TCC responsible process, and the Removable Volumes
       # prompt and grant would go to Terminal instead of the bundle.
       # open starts the app with a clean environment, so what wails3 dev set
-      # (the Vite dev server URL, the port) and DRY_RUN are passed by hand.
+      # (the Vite dev server URL, the port), DRY_RUN and FLASHIT_ISO_READER
+      # are passed by hand.
       - pkill -f "{{.APP}}/Contents/MacOS/{{.APP_NAME}}" || true
       - |
         env_args=""
-        for name in FRONTEND_DEVSERVER_URL WAILS_VITE_PORT DRY_RUN; do
+        for name in FRONTEND_DEVSERVER_URL WAILS_VITE_PORT DRY_RUN FLASHIT_ISO_READER; do
           eval "value=\${$name:-}"
           if [ -n "$value" ]; then env_args="$env_args --env $name=$value"; fi
         done

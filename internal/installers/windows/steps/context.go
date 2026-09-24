@@ -1,7 +1,10 @@
 package steps
 
 import (
-	"github.com/kyleaupton/flashit/internal/iso"
+	"context"
+	"io/fs"
+
+	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/priv"
 )
 
@@ -14,9 +17,22 @@ type FlashContext struct {
 	PrivService priv.PrivilegedService // Privileged service for disk operations
 
 	// Pipeline state (set during execution)
-	ISOMountResult *iso.MountResult // ISO mount result (set by MountISO)
-	ISOMountPath   string           // Path where ISO is mounted (set by MountISO)
-	USBMountPath   string           // Path where USB is mounted (set by FormatUSB)
-	InstallWimPath string           // Path to install.wim (set by AnalyzeWim)
-	NeedsSplit     bool             // Whether install.wim exceeds FAT32 limit (set by AnalyzeWim)
+	Source         fs.FS  // ISO contents, read in process or through a mount (set by OpenSource)
+	USBMountPath   string // Path where USB is mounted (set by FormatUSB)
+	InstallWim     string // install.wim's path within Source (set by AnalyzeWim)
+	InstallWimSize int64  // (set by AnalyzeWim)
+	NeedsSplit     bool   // Whether install.wim exceeds FAT32 limit (set by AnalyzeWim)
+
+	closeSource func(context.Context)
+}
+
+// releaseSource closes or unmounts whatever OpenSource opened.
+func (s *FlashContext) releaseSource(ctx context.Context, e core.Executor) {
+	if s.closeSource == nil {
+		return
+	}
+	e.Emit(core.Event{Type: core.EventLog, Message: "Closing ISO..."})
+	s.closeSource(ctx)
+	s.closeSource = nil
+	s.Source = nil
 }

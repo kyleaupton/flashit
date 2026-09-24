@@ -3,7 +3,7 @@ package steps
 import (
 	"context"
 	"fmt"
-	"os"
+	iofs "io/fs"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/core"
@@ -26,7 +26,7 @@ func (CopyFiles) Run(ctx context.Context, state *FlashContext, e core.Executor) 
 	e.Emit(core.Event{Type: "log", Message: "Copying files..."})
 
 	opts := fs.CopyDirOptions{
-		Filter: func(relPath string, info os.FileInfo) bool {
+		Filter: func(relPath string, info iofs.FileInfo) bool {
 			if info.Size() > fat32MaxFileSize {
 				e.Emit(core.Event{Type: "log", Message: fmt.Sprintf("Skipping large file %s (%.2f GB)", relPath, float64(info.Size())/1e9)})
 				return false
@@ -37,7 +37,7 @@ func (CopyFiles) Run(ctx context.Context, state *FlashContext, e core.Executor) 
 		ProgressInterval: 250 * time.Millisecond,
 	}
 
-	err := fs.CopyDir(ctx, state.ISOMountPath, state.USBMountPath, opts, func(p fs.CopyProgress) bool {
+	err := fs.CopyDir(ctx, state.Source, state.USBMountPath, opts, func(p fs.CopyProgress) bool {
 		if p.Total > 0 {
 			percent := float64(p.Written) * 100.0 / float64(p.Total)
 			e.Emit(core.Event{
