@@ -304,6 +304,7 @@ func TestClientHelperGoesAway(t *testing.T) {
 	srv := helper.New(disk, helpertest.FakeAuth{}, helper.Options{WriteBufferSize: 1024})
 	cc, sc := helpertest.SocketPair(t)
 	serveCtx, stopServer := context.WithCancel(context.Background())
+	defer stopServer()
 	go func() { _ = srv.ServeConn(serveCtx, sc, helper.Peer{UID: os.Getuid()}) }()
 	c := NewClient(cc)
 	defer c.Close()
@@ -319,7 +320,9 @@ func TestClientHelperGoesAway(t *testing.T) {
 		result <- c.WriteImage(ctx, proto.WriteImageParams{Device: helpertest.Removable, Size: size}, src, nil)
 	}()
 	<-disk.Raw.Started
-	stopServer()
+	// A dead helper is a closed socket, not a cancelled context: cancelling
+	// the context races the op's own cancelled reply against the close.
+	sc.Close()
 	close(disk.Raw.Block)
 
 	select {
