@@ -32,7 +32,7 @@ type client struct {
 }
 
 func testOptions() helper.Options {
-	return helper.Options{Version: "test", WriteBufferSize: 1024, ProgressInterval: time.Nanosecond}
+	return helper.Options{Version: "test", WriteBufferSize: 1024, ProgressInterval: time.Nanosecond, UnmountRetry: time.Millisecond}
 }
 
 // serve starts ServeConn on one end of a unix socket pair and returns a
@@ -658,6 +658,7 @@ func TestEject(t *testing.T) {
 		t.Fatalf("ejected %v", disk.Ejected)
 	}
 
+	disk.Log = nil
 	for _, r := range []struct {
 		device string
 		want   proto.ErrorCode
@@ -670,13 +671,141 @@ func TestEject(t *testing.T) {
 		_, resp := c.call("r", proto.OpEject, proto.EjectParams{Device: r.device})
 		wantError(t, resp, r.want)
 	}
-	if len(disk.Ejected) != 1 {
-		t.Fatalf("refused eject ran: %v", disk.Ejected)
+	if log := disk.Snapshot(); len(log) != 0 {
+		t.Fatalf("refused eject touched the disk: %v", log)
+	}
+}
+
+func TestEjectUnmountsFirst(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	ours := validate.MountRoot + "/ESD-USB"
+	disk.MountTab = map[string][]string{
+		helpertest.Removable + "1": {ours, "/media/kyle/ESD-USB"},
+		helpertest.Removable + "2": {
+			validate.MountRoot,
+			validate.MountRoot + "/a/b",
+			validate.MountRoot + "/../../etc",
+			validate.MountRoot + "/$(id)",
+		},
+		helpertest.Removable: {ours},
+	}
+	c := serve(t, disk, testOptions())
+	c.ping()
+
+	_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+	wantResult(t, resp)
+	want := []string{
+		"unmount " + helpertest.Removable + "1",
+		"unmount " + helpertest.Removable + "2",
+		"unmount " + helpertest.Removable,
+		"rmdir " + ours,
+		"eject " + helpertest.Removable,
+	}
+	if got := disk.Snapshot(); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("calls %v, want %v", got, want)
+	}
+}
+
+func TestEjectBusy(t *testing.T) {
+	t.Run("gives up", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		disk.BusyFor = map[string]int{helpertest.Removable + "1": 1000}
+		disk.MountTab = map[string][]string{helpertest.Removable + "1": {validate.MountRoot + "/ESD-USB"}}
+		c := serve(t, disk, testOptions())
+		c.ping()
+
+		_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+		wantError(t, resp, proto.CodeDeviceBusy)
+		tries := 0
+		for _, l := range disk.Snapshot() {
+			switch {
+			case l == "unmount "+helpertest.Removable+"1":
+				tries++
+			case strings.HasPrefix(l, "eject"), strings.HasPrefix(l, "rmdir"):
+				t.Fatalf("%s ran while the volume was busy", l)
+			}
+		}
+		if tries != 5 {
+			t.Fatalf("tried to unmount %d times, want 5", tries)
+		}
+	})
+
+	t.Run("released", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		disk.BusyFor = map[string]int{helpertest.Removable + "1": 2}
+		c := serve(t, disk, testOptions())
+		c.ping()
+
+		_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+		wantResult(t, resp)
+		if len(disk.Ejected) != 1 {
+			t.Fatalf("ejected %v", disk.Ejected)
+		}
+	})
+
+	t.Run("other errors are not retried", func(t *testing.T) {
+		disk := helpertest.NewFakeDisk()
+		disk.UnmountErr = map[string]error{helpertest.Removable + "1": syscall.EPERM}
+		c := serve(t, disk, testOptions())
+		c.ping()
+
+		_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+		wantError(t, resp, proto.CodeDeviceBusy)
+		if log := disk.Snapshot(); len(log) != 1 {
+			t.Fatalf("calls %v", log)
+		}
+	})
+}
+
+func TestEjectAfterUnmountIsBestEffort(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	disk.EjectErr = errors.New("eject: unable to eject")
+	disk.RemoveDirErr = errors.New("directory not empty")
+	disk.MountTab = map[string][]string{helpertest.Removable + "1": {validate.MountRoot + "/ESD-USB"}}
+	c := serve(t, disk, testOptions())
+	c.ping()
+
+	_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+	wantResult(t, resp)
+	if len(disk.Unmounted) != 3 {
+		t.Fatalf("unmounted %v", disk.Unmounted)
+	}
+}
+
+// Without a MountTable (macOS) eject is the OS eject alone, and its failure
+// is the op's.
+func TestEjectWithoutMountTable(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	disk.EjectErr = errors.New("diskutil eject failed")
+	c := serve(t, helpertest.NoMountTable{Disk: disk}, testOptions())
+	c.ping()
+
+	_, resp := c.call("1", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
+	wantError(t, resp, proto.CodeInternal)
+	if log := disk.Snapshot(); len(log) != 1 || log[0] != "eject "+helpertest.Removable {
+		t.Fatalf("calls %v", log)
+	}
+}
+
+func TestUnmountDeviceRetriesAndRemovesDirs(t *testing.T) {
+	disk := helpertest.NewFakeDisk()
+	disk.BusyFor = map[string]int{helpertest.Removable + "1": 3}
+	disk.MountTab = map[string][]string{helpertest.Removable + "1": {validate.MountRoot + "/ESD-USB"}}
+	c := serve(t, disk, testOptions())
+	c.ping()
+
+	_, resp := c.call("1", proto.OpUnmount, proto.UnmountParams{Device: helpertest.Removable})
+	wantResult(t, resp)
+	if len(disk.RemovedDirs) != 1 || disk.RemovedDirs[0] != validate.MountRoot+"/ESD-USB" {
+		t.Fatalf("removed %v", disk.RemovedDirs)
+	}
+	if len(disk.Ejected) != 0 {
+		t.Fatal("unmount ejected")
 	}
 
-	disk.EjectErr = errors.New("no eject binary")
-	_, resp = c.call("2", proto.OpEject, proto.EjectParams{Device: helpertest.Removable})
-	wantError(t, resp, proto.CodeInternal)
+	disk.BusyFor = map[string]int{helpertest.Removable + "1": 1000}
+	_, resp = c.call("2", proto.OpUnmount, proto.UnmountParams{Device: helpertest.Removable})
+	wantError(t, resp, proto.CodeDeviceBusy)
 }
 
 func TestIdleExitWithoutRequests(t *testing.T) {

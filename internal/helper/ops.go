@@ -3,6 +3,7 @@ package helper
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"syscall"
@@ -11,6 +12,8 @@ import (
 	"github.com/kyleaupton/flashit/internal/helper/validate"
 	"github.com/kyleaupton/flashit/internal/proto"
 )
+
+const unmountAttempts = 5
 
 func (sess *session) run(ctx context.Context, req proto.Request, image *os.File) (any, error) {
 	switch req.Op {
@@ -31,13 +34,13 @@ func (sess *session) run(ctx context.Context, req proto.Request, image *os.File)
 		if err := decodeParams(req, &p); err != nil {
 			return nil, err
 		}
-		return nil, sess.unmount(p)
+		return nil, sess.unmount(ctx, p)
 	case proto.OpEject:
 		var p proto.EjectParams
 		if err := decodeParams(req, &p); err != nil {
 			return nil, err
 		}
-		return nil, sess.eject(p)
+		return nil, sess.eject(ctx, p)
 	case proto.OpMountISO:
 		return nil, proto.NewError(proto.CodeInvalidRequest, "mount_iso is not implemented")
 	default:
@@ -125,16 +128,105 @@ func (sess *session) openTarget(info DeviceInfo, grant Grant) (RawDevice, error)
 }
 
 func (sess *session) unmountAll(info DeviceInfo) error {
+	targets, err := sess.unmountTargets(info)
+	if err != nil {
+		return err
+	}
+	if err := sess.unmountEach(targets); err != nil {
+		return proto.NewError(proto.CodeDeviceBusy, err.Error())
+	}
+	return nil
+}
+
+// unmountTargets is every partition of the device, then the device itself.
+func (sess *session) unmountTargets(info DeviceInfo) ([]string, error) {
 	parts, err := sess.s.disk.Partitions(info.Path)
 	if err != nil {
-		return proto.Errorf(proto.CodeInternal, "list partitions of %s: %v", info.Path, err)
+		return nil, proto.Errorf(proto.CodeInternal, "list partitions of %s: %v", info.Path, err)
 	}
-	for _, p := range append(parts, info.Path) {
+	return append(parts, info.Path), nil
+}
+
+func (sess *session) unmountEach(targets []string) error {
+	for _, p := range targets {
 		if err := sess.s.disk.Unmount(p); err != nil {
-			return proto.Errorf(proto.CodeDeviceBusy, "unmount %s: %v", p, err)
+			return fmt.Errorf("unmount %s: %w", p, err)
 		}
 	}
 	return nil
+}
+
+// unmountAllRetry is unmountAll for a volume the user may have just been
+// looking at: a file manager or a shell can hold it for a moment, so EBUSY
+// is retried a few times before it becomes device_busy.
+func (sess *session) unmountAllRetry(ctx context.Context, info DeviceInfo) error {
+	targets, err := sess.unmountTargets(info)
+	if err != nil {
+		return err
+	}
+	for attempt := 1; ; attempt++ {
+		err := sess.unmountEach(targets)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, syscall.EBUSY) || attempt == unmountAttempts {
+			return proto.NewError(proto.CodeDeviceBusy, err.Error())
+		}
+		sess.s.opts.Logger.Info("volume busy, retrying", "device", info.Path, "attempt", attempt, "error", err)
+		select {
+		case <-ctx.Done():
+			return proto.NewError(proto.CodeCancelled, "cancelled while waiting for the volume to be released")
+		case <-time.After(sess.s.opts.UnmountRetry):
+		}
+	}
+}
+
+// detach unmounts everything on the device and, on a MountTable host,
+// removes the directories format_disk mounted it on. Those come from the OS
+// mount table for this device, never from the request, and only ones that
+// format_disk could have made (MountRoot plus a label) are considered. They
+// are looked up before unmounting, since the table forgets them after.
+func (sess *session) detach(ctx context.Context, info DeviceInfo) error {
+	mt, ok := sess.s.disk.(MountTable)
+	var dirs []string
+	if ok {
+		dirs = sess.mountDirs(mt, info)
+	}
+	if err := sess.unmountAllRetry(ctx, info); err != nil {
+		return err
+	}
+	for _, dir := range dirs {
+		if err := mt.RemoveMountDir(dir); err != nil {
+			sess.s.opts.Logger.Warn("mountpoint left in place", "dir", dir, "error", err)
+			continue
+		}
+		sess.s.opts.Logger.Info("removed mountpoint", "dir", dir)
+	}
+	return nil
+}
+
+func (sess *session) mountDirs(mt MountTable, info DeviceInfo) []string {
+	targets, err := sess.unmountTargets(info)
+	if err != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var dirs []string
+	for _, p := range targets {
+		mps, err := mt.Mounts(p)
+		if err != nil {
+			sess.s.opts.Logger.Warn("read mount table", "device", p, "error", err)
+			continue
+		}
+		for _, mp := range mps {
+			if _, err := validate.Mountpoint(mp); err != nil || seen[mp] {
+				continue
+			}
+			seen[mp] = true
+			dirs = append(dirs, mp)
+		}
+	}
+	return dirs
 }
 
 // writeImage streams the file the app passed with the request onto the
@@ -259,7 +351,7 @@ func (sess *session) formatDisk(ctx context.Context, p proto.FormatDiskParams) (
 	return proto.FormatDiskResult{Mountpoint: mountpoint}, nil
 }
 
-func (sess *session) unmount(p proto.UnmountParams) error {
+func (sess *session) unmount(ctx context.Context, p proto.UnmountParams) error {
 	switch {
 	case p.Device != "" && p.Mountpoint != "":
 		return proto.NewError(proto.CodeInvalidRequest, "unmount takes a device or a mountpoint, not both")
@@ -268,7 +360,7 @@ func (sess *session) unmount(p proto.UnmountParams) error {
 		if err != nil {
 			return err
 		}
-		return sess.unmountAll(info)
+		return sess.detach(ctx, info)
 	case p.Mountpoint != "":
 		mp, err := validate.Mountpoint(p.Mountpoint)
 		if err != nil {
@@ -284,13 +376,25 @@ func (sess *session) unmount(p proto.UnmountParams) error {
 	}
 }
 
-func (sess *session) eject(p proto.EjectParams) error {
+// eject detaches the device. Where the OS eject unmounts on its own
+// (macOS) that is all it does. Elsewhere it unmounts first, and once that
+// has worked a failing OS eject is only logged: the stick is safe to pull.
+func (sess *session) eject(ctx context.Context, p proto.EjectParams) error {
 	info, err := sess.resolveTarget(proto.OpEject, p.Device)
 	if err != nil {
 		return err
 	}
+	if _, ok := sess.s.disk.(MountTable); !ok {
+		if err := sess.s.disk.Eject(info.Path); err != nil {
+			return proto.Errorf(proto.CodeInternal, "eject %s: %v", info.Path, err)
+		}
+		return nil
+	}
+	if err := sess.detach(ctx, info); err != nil {
+		return err
+	}
 	if err := sess.s.disk.Eject(info.Path); err != nil {
-		return proto.Errorf(proto.CodeInternal, "eject %s: %v", info.Path, err)
+		sess.s.opts.Logger.Warn("eject failed after unmounting; the device is safe to remove", "device", info.Path, "error", err)
 	}
 	return nil
 }

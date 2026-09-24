@@ -135,25 +135,53 @@ func (d *linuxDisk) Unmount(path string) error {
 		return err
 	}
 
-	var st unix.Stat_t
-	if err := unix.Stat(path, &st); err != nil {
-		return err
-	}
-	majMin := fmt.Sprintf("%d:%d", unix.Major(uint64(st.Rdev)), unix.Minor(uint64(st.Rdev)))
-	mounts, err := readMountInfo()
+	mounts, err := mountsOf(path)
 	if err != nil {
 		return err
 	}
 	for i := len(mounts) - 1; i >= 0; i-- {
-		if mounts[i].majMin != majMin {
-			continue
-		}
 		d.log.Info("unmounting", "device", path, "mountpoint", mounts[i].mountpoint)
 		if err := unix.Unmount(mounts[i].mountpoint, 0); err != nil {
 			return fmt.Errorf("umount %s: %w", mounts[i].mountpoint, err)
 		}
 	}
 	return nil
+}
+
+func (d *linuxDisk) Mounts(device string) ([]string, error) {
+	mounts, err := mountsOf(device)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, len(mounts))
+	for i, m := range mounts {
+		out[i] = m.mountpoint
+	}
+	return out, nil
+}
+
+func (d *linuxDisk) RemoveMountDir(dir string) error {
+	return removeMountDir(validate.MountRoot, dir)
+}
+
+// mountsOf returns the mount table entries whose major:minor is device's.
+func mountsOf(device string) ([]mount, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(device, &st); err != nil {
+		return nil, err
+	}
+	majMin := fmt.Sprintf("%d:%d", unix.Major(uint64(st.Rdev)), unix.Minor(uint64(st.Rdev)))
+	all, err := readMountInfo()
+	if err != nil {
+		return nil, err
+	}
+	var mounts []mount
+	for _, m := range all {
+		if m.majMin == majMin {
+			mounts = append(mounts, m)
+		}
+	}
+	return mounts, nil
 }
 
 func (d *linuxDisk) OpenRaw(device string, _ Grant) (RawDevice, error) {
@@ -254,15 +282,18 @@ func waitForPath(ctx context.Context, path string, timeout time.Duration) error 
 }
 
 // Eject flushes, asks the kernel to re-read the new partition table, and
-// spins the device down with eject(1) when it is installed.
+// spins the device down with eject(1) when it is installed. The eject op has
+// unmounted everything by then, so none of this is needed for a safe pull.
 func (d *linuxDisk) Eject(device string) error {
 	unix.Sync()
 	if f, err := os.OpenFile(device, os.O_RDONLY|unix.O_NONBLOCK, 0); err == nil {
-		_, _ = unix.IoctlRetInt(int(f.Fd()), blkRRPart)
+		if _, err := unix.IoctlRetInt(int(f.Fd()), blkRRPart); err != nil {
+			d.log.Warn("re-read partition table", "device", device, "error", err)
+		}
 		f.Close()
 	}
 	if _, err := exec.LookPath("eject"); err != nil {
-		d.log.Warn("eject not installed, leaving device attached", "device", device)
+		d.log.Info("eject not installed, leaving the unmounted device attached", "device", device)
 		return nil
 	}
 	return run(context.Background(), d.log, "eject", device)

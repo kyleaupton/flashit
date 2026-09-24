@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"syscall"
 
 	"github.com/kyleaupton/flashit/internal/helper"
 	"github.com/kyleaupton/flashit/internal/helper/validate"
@@ -42,9 +43,12 @@ type FakeDisk struct {
 	Parts         map[string][]string
 	PartitionsErr error
 	UnmountErr    map[string]error
-	Unmounted     []string
-	OpenRawErr    error
-	Raw           *FakeRaw
+	// BusyFor makes Unmount of a path fail with EBUSY this many times
+	// before it succeeds.
+	BusyFor    map[string]int
+	Unmounted  []string
+	OpenRawErr error
+	Raw        *FakeRaw
 	// OpenRawGrants records the grant passed to every OpenRaw call.
 	OpenRawGrants []helper.Grant
 	FormatErr     error
@@ -52,6 +56,15 @@ type FakeDisk struct {
 	Formats       []FormatCall
 	EjectErr      error
 	Ejected       []string
+	// MountTab is what Mounts reports per device; RemovedDirs records every
+	// RemoveMountDir that succeeded.
+	MountTab     map[string][]string
+	MountsErr    error
+	RemoveDirErr error
+	RemovedDirs  []string
+	// Log is every Unmount, Eject and RemoveMountDir call in order, as
+	// "unmount <path>", "eject <device>" and "rmdir <dir>".
+	Log []string
 }
 
 func NewFakeDisk() *FakeDisk {
@@ -99,6 +112,11 @@ func (d *FakeDisk) Partitions(device string) ([]string, error) {
 func (d *FakeDisk) Unmount(path string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.Log = append(d.Log, "unmount "+path)
+	if d.BusyFor[path] > 0 {
+		d.BusyFor[path]--
+		return fmt.Errorf("umount %s: %w", path, syscall.EBUSY)
+	}
 	if err := d.UnmountErr[path]; err != nil {
 		return err
 	}
@@ -133,11 +151,42 @@ func (d *FakeDisk) Format(ctx context.Context, device, fs, label string) (string
 func (d *FakeDisk) Eject(device string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.Log = append(d.Log, "eject "+device)
 	if d.EjectErr != nil {
 		return d.EjectErr
 	}
 	d.Ejected = append(d.Ejected, device)
 	return nil
+}
+
+func (d *FakeDisk) Mounts(device string) ([]string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.MountTab[device], d.MountsErr
+}
+
+func (d *FakeDisk) RemoveMountDir(dir string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.Log = append(d.Log, "rmdir "+dir)
+	if d.RemoveDirErr != nil {
+		return d.RemoveDirErr
+	}
+	d.RemovedDirs = append(d.RemovedDirs, dir)
+	return nil
+}
+
+// Snapshot returns a copy of Log.
+func (d *FakeDisk) Snapshot() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.Log...)
+}
+
+// NoMountTable hides FakeDisk's MountTable methods, so the helper treats it
+// like a host whose eject unmounts on its own (macOS).
+type NoMountTable struct {
+	helper.Disk
 }
 
 // FakeRaw records what was written to a device. Block, when set, makes every

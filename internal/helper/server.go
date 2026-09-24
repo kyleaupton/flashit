@@ -19,6 +19,7 @@ const (
 	defaultIdleTimeout      = 60 * time.Second
 	defaultWriteBufferSize  = 4 << 20
 	defaultProgressInterval = 100 * time.Millisecond
+	defaultUnmountRetry     = time.Second
 	maxLineBytes            = 64 << 10
 )
 
@@ -27,7 +28,10 @@ type Options struct {
 	IdleTimeout      time.Duration
 	WriteBufferSize  int
 	ProgressInterval time.Duration
-	Logger           *slog.Logger
+	// UnmountRetry is the pause between attempts when eject or unmount finds
+	// the volume busy.
+	UnmountRetry time.Duration
+	Logger       *slog.Logger
 	// Authorizer gates write_image and format_disk. nil means the host
 	// authorized the user before the helper started (polkit, UAC) and no
 	// per-op check exists.
@@ -49,6 +53,9 @@ func New(disk Disk, auth Auth, opts Options) *Server {
 	}
 	if opts.ProgressInterval <= 0 {
 		opts.ProgressInterval = defaultProgressInterval
+	}
+	if opts.UnmountRetry <= 0 {
+		opts.UnmountRetry = defaultUnmountRetry
 	}
 	if opts.Logger == nil {
 		opts.Logger = slog.New(slog.DiscardHandler)
