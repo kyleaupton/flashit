@@ -7,11 +7,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/logger"
+	"github.com/kyleaupton/flashit/internal/proto"
 )
 
 type linuxService struct {
@@ -101,34 +101,23 @@ type linuxDiskOps struct {
 }
 
 func (d *linuxDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
-	abs, err := filepath.Abs(isoPath)
+	image, err := os.Open(isoPath)
 	if err != nil {
 		return err
 	}
-	fi, err := os.Stat(abs)
+	defer image.Close()
+	fi, err := image.Stat()
 	if err != nil {
 		return err
 	}
-	return d.client.WriteImage(ctx, device, abs, fi.Size(), progress)
+	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size()}, image, progress)
 }
 
 func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
-	_, err := d.client.FormatDisk(ctx, device, filesystem, volumeName)
+	_, err := d.client.FormatDisk(ctx, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: volumeName})
 	return err
 }
 
 func (d *linuxDiskOps) Eject(ctx context.Context, device string) error {
 	return d.client.Eject(ctx, device)
 }
-
-type unavailableDiskOps struct{}
-
-func (unavailableDiskOps) WriteISO(context.Context, string, string, ProgressFunc) error {
-	return ErrHelperNotRunning
-}
-
-func (unavailableDiskOps) FormatDisk(context.Context, string, string, string) error {
-	return ErrHelperNotRunning
-}
-
-func (unavailableDiskOps) Eject(context.Context, string) error { return ErrHelperNotRunning }

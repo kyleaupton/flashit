@@ -1,7 +1,6 @@
 package helper
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -29,6 +28,10 @@ type Options struct {
 	WriteBufferSize  int
 	ProgressInterval time.Duration
 	Logger           *slog.Logger
+	// Authorizer gates write_image and format_disk. nil means the host
+	// authorized the user before the helper started (polkit, UAC) and no
+	// per-op check exists.
+	Authorizer Authorizer
 }
 
 type Server struct {
@@ -79,18 +82,31 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 		}
 	}()
 
-	idle := time.NewTimer(s.opts.IdleTimeout)
-	defer idle.Stop()
+	t := time.NewTimer(s.opts.IdleTimeout)
+	defer t.Stop()
+	idle := t.C
 
+	// active carries the running session's result; nil means no session.
+	var active chan error
 	for {
 		select {
 		case <-ctx.Done():
+			if active != nil {
+				return <-active
+			}
 			return ctx.Err()
 		case err := <-acceptErr:
 			return err
-		case <-idle.C:
+		case <-idle:
 			return ErrIdle
+		case err := <-active:
+			return err
 		case c := <-conns:
+			if active != nil {
+				s.opts.Logger.Warn("refused second connection")
+				s.refuse(c, proto.NewError(proto.CodeBusy, "helper already has a client"))
+				continue
+			}
 			peer, err := s.auth.Authenticate(c)
 			if err != nil {
 				s.opts.Logger.Warn("rejected connection", "error", err)
@@ -98,19 +114,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 				continue
 			}
 			s.opts.Logger.Info("client connected", "uid", peer.UID)
-			idle.Stop()
-			go func() {
-				for {
-					select {
-					case extra := <-conns:
-						s.opts.Logger.Warn("refused second connection")
-						s.refuse(extra, proto.NewError(proto.CodeBusy, "helper already has a client"))
-					case <-done:
-						return
-					}
-				}
-			}()
-			return s.ServeConn(ctx, c, peer)
+			idle = nil
+			active = make(chan error, 1)
+			go func() { active <- s.ServeConn(ctx, c, peer) }()
 		}
 	}
 }
@@ -121,7 +127,8 @@ func (s *Server) refuse(c net.Conn, err *proto.Error) {
 	c.Close()
 }
 
-// ServeConn serves an already authenticated connection on behalf of peer.
+// ServeConn serves an already authenticated connection on behalf of peer;
+// the Auth is not consulted.
 func (s *Server) ServeConn(ctx context.Context, conn net.Conn, peer Peer) error {
 	sess := &session{s: s, conn: conn, peer: peer}
 	return sess.serve(ctx)
@@ -155,24 +162,27 @@ func (sess *session) serve(parent context.Context) error {
 	})
 	defer sess.idle.Stop()
 
-	scanner := bufio.NewScanner(sess.conn)
-	scanner.Buffer(make([]byte, 0, 4096), maxLineBytes)
-
+	rd := newLineReader(sess.conn)
 	var readErr error
-	for scanner.Scan() {
+	for {
+		msg, err := rd.next()
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
+		}
 		sess.idle.Stop()
 		var req proto.Request
-		if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+		if err := json.Unmarshal(msg.line, &req); err != nil {
+			closeFDs(msg.fds)
 			sess.write(proto.ErrorResponse("", proto.NewError(proto.CodeInvalidRequest, "malformed request")))
 			break
 		}
-		if closeConn := sess.handle(ctx, req); closeConn {
+		if closeConn := sess.handle(ctx, req, takeFile(msg.fds)); closeConn {
 			break
 		}
 		sess.armIdle()
-	}
-	if scanner.Err() != nil {
-		readErr = scanner.Err()
 	}
 
 	sess.conn.Close()
@@ -202,9 +212,23 @@ func (sess *session) armIdle() {
 
 // handle dispatches one request and reports whether the connection must be
 // closed afterwards. ping and cancel are answered inline; everything else is
-// an op and runs in its own goroutine so cancel can still be read.
-func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn bool) {
+// an op and runs in its own goroutine so cancel can still be read. src is
+// the file passed with the request, if any; only write_image keeps it.
+func (sess *session) handle(ctx context.Context, req proto.Request, src *os.File) (closeConn bool) {
 	log := sess.s.opts.Logger
+
+	if src != nil && req.Op != proto.OpWriteImage {
+		log.Warn("descriptor passed with an op that takes none", "op", req.Op)
+		src.Close()
+		src = nil
+	}
+	if src != nil {
+		defer func() {
+			if src != nil {
+				src.Close()
+			}
+		}()
+	}
 
 	if req.Op == proto.OpPing {
 		var p proto.PingParams
@@ -264,11 +288,16 @@ func (sess *session) handle(ctx context.Context, req proto.Request) (closeConn b
 	sess.mu.Unlock()
 
 	sess.ops.Add(1)
+	image := src
+	src = nil
 	go func() {
 		defer sess.ops.Done()
 		defer cancel()
+		if image != nil {
+			defer image.Close()
+		}
 
-		data, err := sess.run(opCtx, req)
+		data, err := sess.run(opCtx, req, image)
 		var resp proto.Response
 		if err != nil {
 			pe := toProtoError(opCtx, err)

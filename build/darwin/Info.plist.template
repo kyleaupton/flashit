@@ -5,6 +5,8 @@
             <string>APPL</string>
         <key>CFBundleName</key>
             <string>FlashIt</string>
+        <key>CFBundleDisplayName</key>
+            <string>FlashIt</string>
         <key>CFBundleExecutable</key>
             <string>FlashIt</string>
         <key>CFBundleIdentifier</key>
@@ -18,15 +20,10 @@
         <key>CFBundleIconFile</key>
             <string>icons</string>
         <key>LSMinimumSystemVersion</key>
-            <string>10.15.0</string>
+            <string>13.0</string>
         <key>NSHighResolutionCapable</key>
             <string>true</string>
         <key>NSHumanReadableCopyright</key>
             <string>© 2026, Kyle Upton</string>
-        <key>SMPrivilegedExecutables</key>
-            <dict>
-              <key>dev.kyleupton.flashit.helper</key>
-              <string>identifier "dev.kyleupton.flashit.helper" and anchor apple generic and certificate leaf[subject.OU] = "${APPLE_TEAM_ID}"</string>
-            </dict>
     </dict>
 </plist>

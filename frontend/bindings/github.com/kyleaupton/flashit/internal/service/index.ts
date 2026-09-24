@@ -3,9 +3,11 @@
 
 import * as DrivesService from "./drivesservice.js";
 import * as JobsService from "./jobsservice.js";
+import * as PrivService from "./privservice.js";
 export {
     DrivesService,
-    JobsService
+    JobsService,
+    PrivService
 };
 
 export {

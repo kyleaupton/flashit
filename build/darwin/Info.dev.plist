@@ -1,17 +1,14 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
     <dict>
-        <key>SMPrivilegedExecutables</key>
-            <dict>
-              <key>dev.kyleupton.flashit.helper</key>
-              <string>identifier "dev.kyleupton.flashit.helper"</string>
-            </dict>
         <key>CFBundlePackageType</key>
             <string>APPL</string>
         <key>CFBundleName</key>
             <string>FlashIt</string>
+        <key>CFBundleDisplayName</key>
+            <string>FlashIt</string>
         <key>CFBundleExecutable</key>
-            <string>flashit</string>
+            <string>FlashIt</string>
         <key>CFBundleIdentifier</key>
             <string>dev.kyleupton.flashit</string>
         <key>CFBundleVersion</key>
@@ -23,7 +20,7 @@
         <key>CFBundleIconFile</key>
             <string>icons</string>
         <key>LSMinimumSystemVersion</key>
-            <string>10.15.0</string>
+            <string>13.0</string>
         <key>NSHighResolutionCapable</key>
             <string>true</string>
         <key>NSHumanReadableCopyright</key>

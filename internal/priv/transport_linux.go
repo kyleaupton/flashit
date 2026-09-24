@@ -14,7 +14,6 @@ import (
 )
 
 const (
-	helperName      = "flashit-helper"
 	installedHelper = "/usr/libexec/flashit/flashit-helper"
 	// The polkit dialog blocks until the user answers; give them a while.
 	spawnTimeout = 2 * time.Minute
@@ -23,38 +22,7 @@ const (
 	exitGrace = 70 * time.Second
 )
 
-// helperProcess is one pkexec-spawned helper and the socket it serves.
-type helperProcess struct {
-	conn net.Conn
-	cmd  *exec.Cmd
-	dir  string
-	done chan error
-}
-
-// findHelper looks next to the running executable, in its helpers/
-// directory (the Taskfile's bin/helpers layout), then at the packaged path.
-// Never the working directory: pkexec would run whatever sits there as root.
-func findHelper() (string, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return "", err
-	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
-	}
-	exeDir := filepath.Dir(exe)
-	candidates := []string{
-		filepath.Join(exeDir, helperName),
-		filepath.Join(exeDir, "helpers", helperName),
-		installedHelper,
-	}
-	for _, p := range candidates {
-		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("helper not found at %v", candidates)
-}
+var installedHelperPaths = []string{installedHelper}
 
 // spawnHelper elevates the helper through pkexec on a fresh private socket
 // directory and connects once the socket appears. The helper checks that the
@@ -157,26 +125,4 @@ func (h *helperProcess) release() {
 			os.RemoveAll(h.dir)
 		}
 	}()
-}
-
-// wait blocks until the pkexec child has exited or bound passes. The exit
-// status is put back so later callers see it too.
-func (h *helperProcess) wait(bound time.Duration) bool {
-	select {
-	case err := <-h.done:
-		h.done <- err
-		return true
-	case <-time.After(bound):
-		return false
-	}
-}
-
-func (h *helperProcess) alive() bool {
-	select {
-	case err := <-h.done:
-		h.done <- err
-		return false
-	default:
-		return true
-	}
 }

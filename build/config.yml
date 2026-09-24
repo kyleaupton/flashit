@@ -34,6 +34,9 @@ dev_mode:
       - "*_test.go"
     watched_extension:
       - "*.go"
+      - "*.c" # cgo sources of the helper and the macOS shim
+      - "*.h"
+      - "*.m"
       - "*.js" # Watch for changes to JS/TS files included using the //wails:include directive.
       - "*.ts" # The frontend directory will be excluded entirely by the setting above.
     git_ignore: true

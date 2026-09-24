@@ -83,24 +83,6 @@ func TestTarget(t *testing.T) {
 	}
 }
 
-func TestSourcePath(t *testing.T) {
-	cases := []struct {
-		in   string
-		want proto.ErrorCode
-	}{
-		{"/tmp/x.iso", ""},
-		{"", proto.CodeInvalidSource},
-		{"x.iso", proto.CodeInvalidSource},
-		{"/tmp/../etc/shadow", proto.CodeInvalidSource},
-		{"/tmp//x.iso", proto.CodeInvalidSource},
-		{"/tmp/x.iso\x00", proto.CodeInvalidSource},
-	}
-	for _, c := range cases {
-		_, err := SourcePath(c.in)
-		wantCode(t, err, c.want)
-	}
-}
-
 func TestCapacity(t *testing.T) {
 	dev := DeviceInfo{Path: "/dev/sdb", Size: 1000}
 	wantCode(t, Capacity(1000, dev), "")

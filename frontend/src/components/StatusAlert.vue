@@ -2,17 +2,25 @@
 import { ref, computed } from 'vue'
 import type { AppState } from '@/types'
 import { Alert, AlertTitle, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
 
 const props = defineProps<{
   status: AppState
   error?: string | null
+  tccDenied?: boolean
+}>()
+
+const emit = defineEmits<{
+  openSettings: []
+  retry: []
 }>()
 
 const showDetails = ref(false)
 
 const isSuccess = computed(() => props.status === 'complete')
 const isCancelled = computed(() => props.status === 'cancelled')
-const isError = computed(() => props.status === 'error')
+const isTccDenied = computed(() => props.status === 'error' && props.tccDenied)
+const isError = computed(() => props.status === 'error' && !props.tccDenied)
 </script>
 
 <template>
@@ -58,6 +66,36 @@ const isError = computed(() => props.status === 'error')
     <AlertTitle>Cancelled</AlertTitle>
     <AlertDescription>
       The operation was cancelled. Your drive may be in an incomplete state.
+    </AlertDescription>
+  </Alert>
+
+  <!-- Removable Volumes was refused; nothing has touched the drive -->
+  <Alert v-else-if="isTccDenied" class="approval-alert">
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+    <AlertTitle>Permission needed</AlertTitle>
+    <AlertDescription>
+      <span>
+        FlashIt needs access to removable volumes to write your drive. Allow
+        FlashIt under Privacy &amp; Security &rsaquo; Files and Folders &rsaquo;
+        Removable Volumes, then try again.
+      </span>
+      <div class="approval-actions">
+        <Button size="sm" @click="emit('openSettings')">Open System Settings</Button>
+        <Button size="sm" variant="secondary" @click="emit('retry')">Try again</Button>
+      </div>
     </AlertDescription>
   </Alert>
 
@@ -114,6 +152,21 @@ const isError = computed(() => props.status === 'error')
 
 .error-alert {
   border-color: var(--destructive);
+}
+
+.approval-alert {
+  border-color: var(--primary);
+  background: color-mix(in oklch, var(--primary) 10%, var(--card));
+}
+
+.approval-alert svg {
+  color: var(--primary);
+}
+
+.approval-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.75rem;
 }
 
 .details-toggle {

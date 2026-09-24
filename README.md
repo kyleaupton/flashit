@@ -57,7 +57,7 @@ FlashIt includes multiple safety mechanisms:
 
 - **Boot drive protection** - Refuses to write to system drives
 - **Removable-only filtering** - Only shows removable USB drives as targets
-- **Privilege verification** - Uses platform-native elevation (launchd on macOS, UAC on Windows)
+- **Privilege verification** - Uses platform-native elevation (authopen on macOS, pkexec on Linux, UAC on Windows)
 
 ## Pure Go WIM Implementation
 

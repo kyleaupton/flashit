@@ -49,6 +49,7 @@ func main() {
 	app.RegisterService(application.NewService(jobsSvc))
 	drivesSvc := service.NewDrivesService()
 	app.RegisterService(application.NewService(drivesSvc))
+	app.RegisterService(application.NewService(service.NewPrivService()))
 
 	// TODO: Add Wails updater service when available in Wails v3
 	// See: https://v3alpha.wails.io/guides/distribution/auto-updates

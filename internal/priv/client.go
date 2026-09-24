@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -16,8 +17,8 @@ import (
 )
 
 // cancelGrace is how long a cancelled op may take to acknowledge before the
-// client gives up on the connection.
-const cancelGrace = 30 * time.Second
+// client gives up on the connection. A variable so tests can shorten it.
+var cancelGrace = 30 * time.Second
 
 // Client speaks the helper protocol over any net.Conn. Responses are demuxed
 // by request ID so a cancel can be sent while an op streams progress.
@@ -42,7 +43,7 @@ func NewClient(conn net.Conn) *Client {
 // Ping performs the version handshake. A helper that speaks a different
 // protocol answers with version_mismatch and closes the connection.
 func (c *Client) Ping(ctx context.Context) (proto.PingResult, error) {
-	resp, err := c.do(ctx, proto.OpPing, proto.PingParams{Protocol: proto.ProtocolVersion}, nil)
+	resp, err := c.do(ctx, proto.OpPing, proto.PingParams{Protocol: proto.ProtocolVersion}, nil, nil)
 	if err != nil {
 		return proto.PingResult{}, err
 	}
@@ -53,13 +54,19 @@ func (c *Client) Ping(ctx context.Context) (proto.PingResult, error) {
 	return r, nil
 }
 
-func (c *Client) WriteImage(ctx context.Context, device, source string, size int64, progress ProgressFunc) error {
-	_, err := c.do(ctx, proto.OpWriteImage, proto.WriteImageParams{Device: device, Source: source, Size: size}, progress)
+// WriteImage streams image onto p.Device. The open file itself is handed to
+// the helper with the request, so the helper writes exactly this file; the
+// caller keeps ownership and closes it afterwards.
+func (c *Client) WriteImage(ctx context.Context, p proto.WriteImageParams, image *os.File, progress ProgressFunc) error {
+	if image == nil {
+		return errors.New("write_image needs an open image")
+	}
+	_, err := c.do(ctx, proto.OpWriteImage, p, []int{int(image.Fd())}, progress)
 	return err
 }
 
-func (c *Client) FormatDisk(ctx context.Context, device, filesystem, label string) (string, error) {
-	resp, err := c.do(ctx, proto.OpFormatDisk, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: label}, nil)
+func (c *Client) FormatDisk(ctx context.Context, p proto.FormatDiskParams) (string, error) {
+	resp, err := c.do(ctx, proto.OpFormatDisk, p, nil, nil)
 	if err != nil {
 		return "", err
 	}
@@ -71,18 +78,18 @@ func (c *Client) FormatDisk(ctx context.Context, device, filesystem, label strin
 }
 
 func (c *Client) Unmount(ctx context.Context, device string) error {
-	_, err := c.do(ctx, proto.OpUnmount, proto.UnmountParams{Device: device}, nil)
+	_, err := c.do(ctx, proto.OpUnmount, proto.UnmountParams{Device: device}, nil, nil)
 	return err
 }
 
 func (c *Client) Eject(ctx context.Context, device string) error {
-	_, err := c.do(ctx, proto.OpEject, proto.EjectParams{Device: device}, nil)
+	_, err := c.do(ctx, proto.OpEject, proto.EjectParams{Device: device}, nil, nil)
 	return err
 }
 
 // Cancel asks the helper to abort whatever op is in flight.
 func (c *Client) Cancel(ctx context.Context) error {
-	_, err := c.do(ctx, proto.OpCancel, nil, nil)
+	_, err := c.do(ctx, proto.OpCancel, nil, nil, nil)
 	return err
 }
 
@@ -95,7 +102,7 @@ func (c *Client) Close() error {
 // do sends one request and waits for its result or error, forwarding
 // progress. When ctx ends first it sends cancel and keeps waiting for the
 // op's own answer, so the caller never returns while the helper still writes.
-func (c *Client) do(ctx context.Context, op proto.Op, params any, progress ProgressFunc) (proto.Response, error) {
+func (c *Client) do(ctx context.Context, op proto.Op, params any, fds []int, progress ProgressFunc) (proto.Response, error) {
 	id := strconv.FormatUint(c.nextID.Add(1), 10)
 	ch := make(chan proto.Response, 64)
 
@@ -116,7 +123,7 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, progress Progr
 	if err != nil {
 		return proto.Response{}, err
 	}
-	if err := c.send(req); err != nil {
+	if err := c.send(req, fds); err != nil {
 		// The write can fail before the read loop has recorded why the
 		// helper hung up; let it catch up so the caller sees that reason.
 		select {
@@ -161,7 +168,10 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, progress Progr
 				c.sendCancel()
 			}
 		case <-grace:
+			// Closing ends the read loop; wait for it so Broken is true by
+			// the time the caller looks.
 			c.conn.Close()
+			<-c.done
 			return proto.Response{}, fmt.Errorf("helper did not acknowledge cancel: %w", ctx.Err())
 		}
 	}
@@ -171,18 +181,17 @@ func (c *Client) do(ctx context.Context, op proto.Op, params any, progress Progr
 // and the read loop drops it.
 func (c *Client) sendCancel() {
 	req, _ := proto.NewRequest(strconv.FormatUint(c.nextID.Add(1), 10), proto.OpCancel, nil)
-	_ = c.send(req)
+	_ = c.send(req, nil)
 }
 
-func (c *Client) send(req proto.Request) error {
+func (c *Client) send(req proto.Request, fds []int) error {
 	b, err := json.Marshal(req)
 	if err != nil {
 		return err
 	}
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	_, err = c.conn.Write(append(b, '\n'))
-	return err
+	return writeWithFDs(c.conn, append(b, '\n'), fds)
 }
 
 func (c *Client) readLoop() {
@@ -232,6 +241,10 @@ func (c *Client) fail(err error) {
 		delete(c.pending, id)
 	}
 }
+
+// Broken reports whether the connection is gone: the helper hung up, sent
+// garbage, or the client closed it on a cancel the helper never answered.
+func (c *Client) Broken() bool { return c.readError() != nil }
 
 func (c *Client) readError() error {
 	c.mu.Lock()

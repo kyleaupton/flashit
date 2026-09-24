@@ -25,6 +25,8 @@ export interface JobEvent {
   step: string
   percent: number
   error: string
+  /** Helper error code (proto.ErrorCode) when the failure came from it */
+  code?: string
 }
 
 /** Step status for UI display */
