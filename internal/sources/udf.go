@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"strings"
 	"unicode/utf16"
 )
@@ -101,9 +102,11 @@ func readUDF(r io.ReaderAt, size int64) (*udfVolume, error) {
 			num := binary.LittleEndian.Uint16(buf[22:24])
 			partNumbers[num] = binary.LittleEndian.Uint32(buf[188:192])
 		case tagLogicalVolume:
-			if bs := binary.LittleEndian.Uint32(buf[212:216]); bs != 0 {
-				v.blockSize = int64(bs)
+			bs := binary.LittleEndian.Uint32(buf[212:216])
+			if bs < 512 || bs > 65536 {
+				return nil, fmt.Errorf("udf: logical block size %d is not supported", bs)
 			}
+			v.blockSize = int64(bs)
 			fsd = parseLongAD(buf[248:264])
 			n := binary.LittleEndian.Uint32(buf[268:272])
 			pos := 440
@@ -157,7 +160,11 @@ func (v *udfVolume) offset(a longAD) (int64, error) {
 	if !ok {
 		return 0, fmt.Errorf("udf: reference to unknown partition %d", a.part)
 	}
-	off := (int64(start) + int64(a.block)) * v.blockSize
+	blocks := int64(start) + int64(a.block)
+	if blocks > math.MaxInt64/v.blockSize {
+		return 0, errors.New("udf: extent offset overflows")
+	}
+	off := blocks * v.blockSize
 	if off+int64(a.bytes()) > v.size {
 		return 0, errors.New("udf: extent lies past the end of the image")
 	}
@@ -212,7 +219,11 @@ func (v *udfVolume) readFileEntry(icb longAD, wantData bool) (fileEntry, error) 
 	default:
 		return fileEntry{}, fmt.Errorf("udf: block %d is not a file entry", icb.block)
 	}
-	fe := fileEntry{size: int64(binary.LittleEndian.Uint64(buf[56:64]))}
+	size := binary.LittleEndian.Uint64(buf[56:64])
+	if size > math.MaxInt64 {
+		return fileEntry{}, fmt.Errorf("udf: information length %d is implausible", size)
+	}
+	fe := fileEntry{size: int64(size)}
 	if !wantData {
 		return fe, nil
 	}
@@ -311,7 +322,12 @@ type fid struct {
 func findFID(data []byte, name string) (fid, bool, error) {
 	pos := 0
 	for pos+38 <= len(data) {
-		if binary.LittleEndian.Uint16(data[pos:pos+2]) != tagFileIdentifier {
+		switch binary.LittleEndian.Uint16(data[pos : pos+2]) {
+		case tagFileIdentifier:
+		case 0:
+			// Zero padding after the last entry ends the listing.
+			return fid{}, false, nil
+		default:
 			return fid{}, false, fmt.Errorf("udf: bad file identifier at %d", pos)
 		}
 		chars := data[pos+18]

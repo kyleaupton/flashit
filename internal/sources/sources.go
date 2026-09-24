@@ -4,8 +4,8 @@ package sources
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"strings"
 )
 
 // Kind is the installer family an image belongs to.
@@ -51,10 +51,13 @@ func Probe(path string) (SourceInfo, error) {
 	if st.IsDir() {
 		return SourceInfo{}, fmt.Errorf("%s is a directory", path)
 	}
+	return probe(f, st.Size(), path)
+}
 
-	info := SourceInfo{Path: path, Size: st.Size(), Kind: Unknown}
+func probe(f io.ReaderAt, size int64, path string) (SourceInfo, error) {
+	info := SourceInfo{Path: path, Size: size, Kind: Unknown}
 
-	vol, err := readVolume(f, st.Size())
+	vol, err := readVolume(f, size)
 	if err != nil {
 		var pe *probeError
 		if errors.As(err, &pe) {
@@ -66,23 +69,28 @@ func Probe(path string) (SourceInfo, error) {
 	info.Label = vol.label
 	info.Hybrid = vol.hybrid
 
-	size, found, err := findWIM(vol.lookup)
+	wimSize, found, err := findWIM(vol.lookup)
 	if err != nil {
 		return info, err
 	}
 	if !found {
-		udf, err := readUDF(f, st.Size())
-		if err != nil && !errors.Is(err, errNoUDF) {
-			return info, err
+		udf, err := readUDF(f, size)
+		switch {
+		case err == nil:
+			wimSize, found, err = findWIM(udf.lookup)
+		case errors.Is(err, errNoUDF):
+			err = nil
 		}
-		if udf != nil {
-			if size, found, err = findWIM(udf.lookup); err != nil {
-				return info, err
-			}
+		// UDF only adds Windows detection: a hybrid ISO is a Linux image
+		// whatever its UDF side looks like, and sector 256 of one can hold
+		// anything.
+		if err != nil && !info.Hybrid {
+			info.Reason = "not a hybrid ISO and the UDF file system could not be read: " + err.Error()
+			return info, nil
 		}
 	}
 	info.HasWIM = found
-	info.WIMSize = size
+	info.WIMSize = wimSize
 
 	switch {
 	case info.HasWIM:
@@ -110,13 +118,3 @@ func findWIM(lookup func(path ...string) (int64, bool, error)) (int64, bool, err
 type probeError struct{ reason string }
 
 func (e *probeError) Error() string { return e.reason }
-
-func (k Kind) String() string {
-	switch k {
-	case LinuxISO:
-		return "Linux ISO"
-	case WindowsISO:
-		return "Windows ISO"
-	}
-	return strings.ToUpper(string(k[:1])) + string(k[1:])
-}

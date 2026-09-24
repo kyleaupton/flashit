@@ -160,7 +160,7 @@ func (im *image) tree(joliet bool, files ...entry) int {
 	return root
 }
 
-func probe(t *testing.T, im *image) SourceInfo {
+func probeImage(t *testing.T, im *image) SourceInfo {
 	t.Helper()
 	info, err := Probe(im.write(t))
 	if err != nil {
@@ -175,7 +175,7 @@ func TestProbe_PlainISO9660Windows(t *testing.T) {
 	im.pvd("WIN_TEST", root)
 	im.terminator(17)
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != WindowsISO || !info.HasWIM || info.WIMSize != 123456 {
 		t.Fatalf("got %+v", info)
 	}
@@ -190,7 +190,7 @@ func TestProbe_InstallESD(t *testing.T) {
 	im.pvd("ESD", root)
 	im.terminator(17)
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != WindowsISO || info.WIMSize != 99 {
 		t.Fatalf("got %+v", info)
 	}
@@ -206,7 +206,7 @@ func TestProbe_JolietPreferred(t *testing.T) {
 	im.joliet(joliet)
 	im.terminator(18)
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != WindowsISO || info.WIMSize != 2 {
 		t.Fatalf("got %+v", info)
 	}
@@ -223,7 +223,7 @@ func TestProbe_JolietFallsBackToPrimary(t *testing.T) {
 	im.joliet(joliet)
 	im.terminator(18)
 
-	if info := probe(t, im); info.WIMSize != 7 {
+	if info := probeImage(t, im); info.WIMSize != 7 {
 		t.Fatalf("got %+v", info)
 	}
 }
@@ -235,7 +235,7 @@ func TestProbe_MultiExtent(t *testing.T) {
 	im.joliet(root)
 	im.terminator(18)
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if want := int64(0xFFFFF800)*2 + 4096; info.WIMSize != want {
 		t.Fatalf("WIMSize = %d, want %d", info.WIMSize, want)
 	}
@@ -249,7 +249,7 @@ func TestProbe_HybridLinux(t *testing.T) {
 	im.terminator(17)
 	im.mbr()
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != LinuxISO || !info.Hybrid || info.HasWIM || info.Reason != "" {
 		t.Fatalf("got %+v", info)
 	}
@@ -265,7 +265,7 @@ func TestProbe_NonHybridNoSources(t *testing.T) {
 	im.pvd("DATA", root)
 	im.terminator(17)
 
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != Unknown || info.Reason != "not a hybrid ISO and no Windows sources" {
 		t.Fatalf("got %+v", info)
 	}
@@ -400,7 +400,7 @@ func windowsUDF(wimSize uint64) *image {
 }
 
 func TestProbe_WindowsUDF(t *testing.T) {
-	info := probe(t, windowsUDF(6017925238))
+	info := probeImage(t, windowsUDF(6017925238))
 	if info.Kind != WindowsISO || !info.HasWIM || info.WIMSize != 6017925238 {
 		t.Fatalf("got %+v", info)
 	}
@@ -409,11 +409,53 @@ func TestProbe_WindowsUDF(t *testing.T) {
 	}
 }
 
+func TestProbe_UDFZeroPaddedDirectory(t *testing.T) {
+	im := windowsUDF(1)
+	// oscdimg pads a directory extent to the block; the zeros after the
+	// last identifier are not a broken entry.
+	rootFE := im.sector(301)
+	binary.LittleEndian.PutUint64(rootFE[56:64], sectorSize)
+	binary.LittleEndian.PutUint32(rootFE[176:180], sectorSize)
+	if info := probeImage(t, im); info.Kind != WindowsISO {
+		t.Fatalf("got %+v", info)
+	}
+}
+
+func TestProbe_HybridWithBrokenUDF(t *testing.T) {
+	im := newImage()
+	root := im.alloc()
+	im.dir(root, root, root, nil)
+	im.pvd("LINUX", root)
+	im.terminator(17)
+	im.mbr()
+	// Sector 256 happens to start with an anchor tag pointing nowhere.
+	anchor := im.sector(udfAnchorSector)
+	udfTag(anchor, tagAnchor)
+	binary.LittleEndian.PutUint32(anchor[16:20], sectorSize)
+	binary.LittleEndian.PutUint32(anchor[20:24], 1<<30)
+
+	info := probeImage(t, im)
+	if info.Kind != LinuxISO || info.HasWIM || info.Reason != "" {
+		t.Fatalf("got %+v", info)
+	}
+}
+
+func TestProbe_NonHybridWithBrokenUDF(t *testing.T) {
+	im := windowsUDF(1)
+	// A type 2 partition map is one the reader does not handle.
+	im.sector(258)[440] = 2
+
+	info := probeImage(t, im)
+	if info.Kind != Unknown || info.Reason == "" {
+		t.Fatalf("got %+v", info)
+	}
+}
+
 func TestProbe_UDFWithoutSources(t *testing.T) {
 	im := windowsUDF(1)
 	// Rename install.wim so the walk succeeds but finds nothing.
 	copy(im.sector(303)[176:], append(udfFID("", fidParent|fidDirectory, 1), udfFID("install.txt", 0, 4)...))
-	info := probe(t, im)
+	info := probeImage(t, im)
 	if info.Kind != Unknown || info.HasWIM {
 		t.Fatalf("got %+v", info)
 	}
