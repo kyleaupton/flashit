@@ -1,6 +1,13 @@
 name: Package Linux
 
 on:
+  # Temporary: workflow_dispatch only works once this file is on main, so
+  # the PR that adds it runs it here. Remove after that PR merges.
+  pull_request:
+    paths:
+      - 'build/linux/**'
+      - '.github/workflows/package-linux.yml'
+      - 'internal/priv/**'
   workflow_dispatch:
     inputs:
       version:
