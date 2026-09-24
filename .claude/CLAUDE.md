@@ -148,7 +148,8 @@ cancelled`, with `authorizing` as a substate of `running` on the job store.
 `internal/installers/linux/linux.go` and
 `internal/installers/windows/windows.go`. The `disk0` check and the
 privileged-service setup are skipped when `core.DryRun` is set (`DRY_RUN=1`),
-which also swaps in `drives.MockProvider`.
+which also swaps in `drives.MockProvider` and lets any readable file, even
+one that probes as `Unknown`, run the Linux installer's simulated pipeline.
 
 The Go helper trusts nothing the app says. `internal/helper/validate`
 rejects device paths outside `/dev` or containing `..`, partitions, non-block

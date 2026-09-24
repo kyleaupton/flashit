@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/drives"
@@ -11,6 +12,7 @@ import (
 	"github.com/kyleaupton/flashit/internal/installers/linux"
 	"github.com/kyleaupton/flashit/internal/installers/windows"
 	"github.com/kyleaupton/flashit/internal/jobs"
+	"github.com/kyleaupton/flashit/internal/priv"
 	"github.com/kyleaupton/flashit/internal/sources"
 )
 
@@ -25,6 +27,10 @@ type StartJobResponse struct {
 }
 
 type JobsService struct {
+	// start serializes StartJob: Plan spawns the privileged helper (a
+	// polkit prompt on Linux) before Enqueue takes its lock, so two
+	// overlapping starts must not both get that far.
+	start      sync.Mutex
 	mgr        *jobs.Manager
 	installers map[sources.Kind]core.Installer
 }
@@ -45,9 +51,12 @@ func NewJobsService() *JobsService {
 // StartJob probes the source, picks the installer by what it found, and
 // refuses a drive the OS does not list as removable before planning.
 func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJobResponse, error) {
+	s.start.Lock()
+	defer s.start.Unlock()
+
 	// Checked before Plan, whose EnsureReady pings the helper: mid-op the
 	// helper answers busy and the client would retire the running job's
-	// session. Enqueue checks again under the lock.
+	// session. Enqueue checks again under its own lock.
 	if s.mgr.Active() {
 		return StartJobResponse{}, jobs.ErrJobActive
 	}
@@ -64,7 +73,11 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	}
 	inst, ok := s.installers[src.Kind]
 	if !ok {
-		return StartJobResponse{}, fmt.Errorf("cannot flash this image: %s", src.Reason)
+		if !core.DryRun {
+			return StartJobResponse{}, fmt.Errorf("cannot flash this image: %s", src.Reason)
+		}
+		// Every step is simulated, so any readable file stands in for an image.
+		inst = s.installers[sources.LinuxISO]
 	}
 
 	drive, err := findRemovable(ctx, req.DriveID)
@@ -80,6 +93,10 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	// when the RPC call returns, but the job runs asynchronously
 	jobID, err := s.mgr.Enqueue(context.Background(), plan)
 	if err != nil {
+		// Plan already brought the helper up for this job; let it go.
+		if !core.DryRun {
+			priv.NewService().Shutdown(ctx)
+		}
 		return StartJobResponse{}, err
 	}
 	return StartJobResponse{

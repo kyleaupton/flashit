@@ -24,7 +24,7 @@ func (l Linux) Plan(ctx context.Context, src sources.SourceInfo, drive drives.Dr
 	if !drives.IsSupported() {
 		return nil, errors.New("Linux USB creation is not supported on this platform")
 	}
-	if src.Kind != sources.LinuxISO {
+	if !core.DryRun && src.Kind != sources.LinuxISO {
 		return nil, fmt.Errorf("%s is not a hybrid Linux ISO", src.Path)
 	}
 	if uint64(src.Size) > drive.SizeBytes {
