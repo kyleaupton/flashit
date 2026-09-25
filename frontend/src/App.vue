@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { onMounted, ref } from 'vue'
 import { useColorMode } from '@vueuse/core'
 import { useDrivesStore, useSourceStore, useJobStore, useAppStore } from '@/stores'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import StatusAlert from '@/components/StatusAlert.vue'
 import FlashButton from '@/components/FlashButton.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { OpenPrivacySettings } from '@flashit/service/privservice'
+import { CheckForUpdates, Info as UpdaterInfo } from '@flashit/service/updaterservice'
 import { toast } from 'vue-sonner'
 import 'vue-sonner/style.css'
 
@@ -17,6 +18,7 @@ const drivesStore = useDrivesStore()
 const sourceStore = useSourceStore()
 const jobStore = useJobStore()
 const appStore = useAppStore()
+const updaterVersion = ref<string | null>(null)
 
 async function handleStartJob() {
   if (!sourceStore.source || !drivesStore.selectedDrive) return
@@ -46,6 +48,12 @@ onMounted(() => {
   drivesStore.startAutoRefresh()
   sourceStore.subscribeToDrops()
   jobStore.subscribeToEvents()
+
+  UpdaterInfo()
+    .then((info) => {
+      if (info.enabled) updaterVersion.value = info.version
+    })
+    .catch(() => {})
 })
 </script>
 
@@ -111,6 +119,22 @@ onMounted(() => {
         </template>
       </div>
     </main>
+
+    <!-- Not in the header: on macOS its top 50px is the native drag area,
+         which takes the click. -->
+    <footer
+      v-if="updaterVersion"
+      class="flex items-center justify-end gap-2 px-4 pb-2 text-xs text-muted-foreground"
+    >
+      <span>v{{ updaterVersion }}</span>
+      <Button
+        variant="link"
+        class="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
+        @click="CheckForUpdates()"
+      >
+        Check for updates
+      </Button>
+    </footer>
   </div>
 </template>
 

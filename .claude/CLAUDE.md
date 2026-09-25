@@ -48,7 +48,7 @@ host_windows.go              Windows: serve as the privileged helper when starte
 internal/core/               Shared contracts: Plan, Runnable, Event, Installer
 internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
 internal/jobs/               Job manager: enqueue (one job at a time), run, cancel
-internal/service/            Wails services: JobsService, DrivesService, SourcesService, PrivService
+internal/service/            Wails services: JobsService, DrivesService, SourcesService, PrivService, UpdaterService
 internal/sources/            Pure-Go image probe: ISO 9660 PVD and directory tree (Joliet first), UDF tree, MBR signature; derives the source kind
 internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
@@ -129,6 +129,16 @@ the package version); untagged builds say `dev` or `0.0.0-<commit>`.
 `release.yml` calls `package-linux.yml` and attaches its packages and
 `SHA256SUMS`.
 
+Windows ships x64 as an NSIS installer (`flashit-<ver>-windows-x64-installer.exe`)
+and a zip holding only `FlashIt.exe` (`flashit-<ver>-windows-x64.zip`, what
+the updater downloads). The installer is per-user only
+(`WAILS_INSTALL_SCOPE` `user` in `project.nsi`, so `RequestExecutionLevel
+user` and no UAC prompt): `%LOCALAPPDATA%\Programs\FlashIt\flashit.exe`, Start
+menu and desktop shortcuts and the HKCU uninstall entry for the current
+user. Old all-users installs in `Program Files` are left alone. If WebView2
+is in neither HKLM nor HKCU, the installer runs Microsoft's bootstrapper
+unelevated. Unsigned: Smart App Control blocks it, SmartScreen warns.
+
 Installer support, derived from `Plan` guards:
 
 | Installer  | macOS | Linux | Windows |
@@ -155,7 +165,8 @@ Each `package-<os>.yml` builds and tests one platform, runs by hand
 workflow artifacts (14 days). `package-macos.yml` takes `signing`: `adhoc`
 by default when run by hand, `developer-id` from the release, which signs,
 notarizes and staples and fails at once if an Apple secret is missing. It
-never falls back to ad hoc. A `v*` tag runs `release.yml`: resolve the
+never falls back to ad hoc. `package-windows.yml` builds x64 only, unsigned:
+the per-user NSIS installer and the updater zip. A `v*` tag runs `release.yml`: resolve the
 version, call the three, then publish everything with one `SHA256SUMS`
 in plain `sha256sum` format, which the updater reads. A version with a
 `-suffix` publishes as a prerelease, which `releases/latest` (and so the
@@ -165,27 +176,37 @@ updater) skips. Run by hand, `release.yml` is a dry run: no publish.
 
 Two unrelated things are both called helpers. The **updater** is the Wails
 updater (`pkg/updater`), which swaps the app by relaunching it in its own
-helper mode; the **privileged helper** is `cmd/flashit-helper`. Say
+helper mode (keyed on `WAILS_UPDATER_HELPER*` env vars, inside
+`application.New`); the **privileged helper** is `cmd/flashit-helper`, or
+`flashit.exe --privileged-helper` on Windows, dispatched before Wails. Say
 "updater" and "privileged helper" in code, docs and UI.
 
-macOS release builds only: `main.go` sets it up when `GOOS` is darwin and
-`Version` is a plain `X.Y.Z` (not `dev`, git describe or `0.0.0-dev.N`).
-It is the Wails GitHub provider on `kyleaupton/flashit` with the built-in
-window, as in the Wails self-update tutorial. It reads `releases/latest`,
-its default matcher picks `flashit-<ver>-darwin-<arch>.tar.gz` (the DMGs
-say `macos`), and it checks the archive against its line in `SHA256SUMS`
-(with no such line it installs unchecked, silently). A silent
-`Check` runs 5 s after start and opens the window through
-`CheckAndInstall` only when a release is found; FlashIt › Check for
-Updates… runs `CheckAndInstall` directly, so it also shows "up to date".
-No `CheckInterval`. The privileged helper is inside the bundle and updates
-with it. Linux (root-owned `/usr/bin`, update via the package) and Windows
-(its own plan later) have no updater.
+macOS and Windows release builds only: `main.go` sets it up when `GOOS` is
+darwin or windows and `Version` is a plain `X.Y.Z` (not `dev`, git describe
+or `0.0.0-dev.N`). It is the Wails GitHub provider on `kyleaupton/flashit`
+with the built-in window, as in the Wails self-update tutorial. It reads
+`releases/latest`; its default matcher takes the first asset naming the
+OS and arch that is not a checksum or `-installer.` file:
+`flashit-<ver>-darwin-<arch>.tar.gz` (the DMGs say `macos`) or
+`flashit-<ver>-windows-x64.zip` (x64 counts as amd64). It checks the
+archive against its line in `SHA256SUMS` (with no such line it installs
+unchecked, silently), unpacks the one entry and swaps it into the running
+bundle or exe. A silent `Check` runs 5 s after start and opens the window
+through `CheckAndInstall` only when a release is found. `UpdaterService`
+reports whether the updater is on and the version; when it is, the app
+shows the version and a "Check for updates" link at the bottom right
+(not in the header: macOS makes its top 50 px a native drag area that
+eats clicks). The link, and FlashIt › Check for Updates… on macOS, run
+`CheckAndInstall` directly, so they also show "up to date". No
+`CheckInterval`. The privileged helper is inside the bundle or is the exe,
+and updates with it. Linux (root-owned `/usr/bin`, update via the package)
+has no updater. A failed swap logs to `wails-update-<old pid>.log` in the
+temp dir (`$TMPDIR` on macOS, `%TEMP%` on Windows).
 
 Accepted, not guarded: restarting during a flash kills the flash; a copy
-run from the DMG or from a folder the user cannot write fails the swap and
-relaunches the old version; updates are unsigned, and the SHA-256 only
-catches corruption.
+run from the DMG or from a folder the user cannot write (an old all-users
+install in `Program Files`) fails the swap and relaunches the old version;
+updates are unsigned, and the SHA-256 only catches corruption.
 
 ## Job execution flow
 

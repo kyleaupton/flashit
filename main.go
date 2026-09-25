@@ -67,11 +67,15 @@ func main() {
 	app.RegisterService(application.NewService(service.NewPrivService()))
 	app.RegisterService(application.NewService(service.NewSourcesService()))
 
+	var checkUpdates func()
 	if updaterEnabled(runtime.GOOS, Version) {
 		if err := setupUpdater(app); err != nil {
 			logger.Error("updater disabled", "error", err)
+		} else {
+			checkUpdates = func() { checkAndInstall(app) }
 		}
 	}
+	app.RegisterService(application.NewService(service.NewUpdaterService(Version, checkUpdates)))
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
 		Title:          "FlashIt",
@@ -101,11 +105,11 @@ func main() {
 
 var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
 
-// Only a macOS bundle can swap itself in place; Linux lives in root-owned
-// /usr/bin. Any other version string sorts below every release tag, so a dev
-// build would be offered each one.
+// macOS swaps the bundle and Windows the per-user FlashIt.exe; Linux lives in
+// root-owned /usr/bin. Any other version string sorts below every release
+// tag, so a dev build would be offered each one.
 func updaterEnabled(goos, version string) bool {
-	return goos == "darwin" && releaseVersion.MatchString(version)
+	return (goos == "darwin" || goos == "windows") && releaseVersion.MatchString(version)
 }
 
 func setupUpdater(app *application.App) error {
@@ -122,7 +126,9 @@ func setupUpdater(app *application.App) error {
 	}); err != nil {
 		return err
 	}
-	app.Menu.Set(macMenu(app))
+	if runtime.GOOS == "darwin" {
+		app.Menu.Set(macMenu(app))
+	}
 
 	// Check silently first: CheckAndInstall opens its window even when there
 	// is nothing to install.
