@@ -24,7 +24,7 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 
 - Go 1.26 (`go.mod` module `github.com/kyleaupton/flashit`); `golift.io/udf`
   needs it
-- Wails v3.0.0-beta.23 (`github.com/wailsapp/wails/v3`, `@wailsio/runtime`)
+- Wails v3.0.0-beta.25 (`github.com/wailsapp/wails/v3`, `@wailsio/runtime`)
 - Vue 3 + TypeScript 5.9 + Vite 7, Pinia, Tailwind 4, reka-ui/shadcn-vue
 - Task (`Taskfile.yml`) drives build and dev
 

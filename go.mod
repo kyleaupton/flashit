@@ -4,7 +4,7 @@ go 1.26.0
 
 require (
 	github.com/google/uuid v1.6.0
-	github.com/wailsapp/wails/v3 v3.0.0-beta.23
+	github.com/wailsapp/wails/v3 v3.0.0-beta.25
 	golang.org/x/sys v0.46.0
 	golift.io/udf v0.1.0
 	howett.net/plist v1.0.2-0.20250314012144-ee69052608d9
