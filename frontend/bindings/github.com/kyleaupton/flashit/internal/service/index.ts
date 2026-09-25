@@ -5,13 +5,11 @@ import * as DrivesService from "./drivesservice.js";
 import * as JobsService from "./jobsservice.js";
 import * as PrivService from "./privservice.js";
 import * as SourcesService from "./sourcesservice.js";
-import * as UpdateService from "./updateservice.js";
 export {
     DrivesService,
     JobsService,
     PrivService,
-    SourcesService,
-    UpdateService
+    SourcesService
 };
 
 export {

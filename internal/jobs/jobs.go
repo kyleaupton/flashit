@@ -36,16 +36,11 @@ type Job struct {
 // one is refused rather than queued.
 var ErrJobActive = errors.New("a job is already running")
 
-// ErrBlocked is returned by Enqueue while Block holds the manager, which
-// the updater does from the moment it starts restarting the app.
-var ErrBlocked = errors.New("FlashIt is restarting to install an update")
-
 type Manager struct {
 	mu          sync.Mutex
 	jobs        map[string]*Job
 	cancelFuncs map[string]context.CancelFunc
 	emit        func(ev core.Event)
-	blocked     bool
 }
 
 func NewManager(emit func(ev core.Event)) *Manager {
@@ -85,39 +80,11 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
-// Busy is ErrJobActive while a job is pending or running, ErrBlocked while
-// jobs are blocked, and nil when a new job may start.
-func (m *Manager) Busy() error {
+// Active reports whether a job is pending or running.
+func (m *Manager) Active() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.busy()
-}
-
-func (m *Manager) busy() error {
-	if m.active() {
-		return ErrJobActive
-	}
-	if m.blocked {
-		return ErrBlocked
-	}
-	return nil
-}
-
-// Block refuses every new job until release is called. It fails when a job
-// is pending or running, or jobs are already blocked, so whoever holds it
-// knows no disk work is under way or can start.
-func (m *Manager) Block() (release func(), err error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.busy(); err != nil {
-		return nil, err
-	}
-	m.blocked = true
-	return sync.OnceFunc(func() {
-		m.mu.Lock()
-		m.blocked = false
-		m.mu.Unlock()
-	}), nil
+	return m.active()
 }
 
 func (m *Manager) active() bool {
@@ -139,9 +106,9 @@ func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) 
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.busy(); err != nil {
+	if m.active() {
 		cancel()
-		return "", err
+		return "", ErrJobActive
 	}
 	id := uuid.NewString()
 	job := &Job{ID: id, Plan: plan, Status: StatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now()}

@@ -152,9 +152,6 @@ jobs:
           task darwin:package VERSION="$VERSION" ARCH="$ARCH"
           lipo -archs bin/FlashIt.app/Contents/MacOS/FlashIt | grep -qx "${ARCH/amd64/x86_64}"
 
-      - name: Check the updater key
-        run: build/updater/check-release-binary.sh bin/FlashIt.app/Contents/MacOS/FlashIt
-
       - name: Verify code signature
         run: |
           codesign --verify --deep --strict bin/FlashIt.app

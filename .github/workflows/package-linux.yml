@@ -89,9 +89,6 @@ jobs:
           task linux:package VERSION="$VERSION"
           ls -l bin/flashit_*.deb bin/flashit-*.rpm
 
-      - name: Check the updater key
-        run: build/updater/check-release-binary.sh bin/FlashIt
-
       - name: Smoke-test the deb
         env:
           VERSION: ${{ steps.version.outputs.version }}

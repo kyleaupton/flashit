@@ -54,7 +54,6 @@ internal/fs/                 File copy from an fs.FS onto the target volume
 internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
 internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
 internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), keepalive.go (HoldDuring), privtest/ (fake service), windows/ (old helper)
-internal/update/             Wails updater setup: mode per platform, guard on the endpoint provider, restart gated on jobs
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
 cmd/flashit-helper/          Go helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3)
@@ -63,8 +62,6 @@ cmd/isotest/                 CLI comparing isofs with the host mount, per file s
 helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
 build/                       Per-platform Taskfiles and packaging config; build/linux holds nfpm.yaml, the polkit policy, the desktop file, icons and smoke-test.sh
-build/updater/               updater.key.pub (the update trust root), harness.sh, check-release-binary.sh
-updater_release.go, updater_harness.go  Update source per build tag (updatertest is the harness)
 .github/workflows/           ci.yml; package-{macos,windows,linux}.yml; release.yml
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
@@ -76,7 +73,6 @@ task dev                  # hot-reload dev build; on macOS assembles and signs b
 task build                # build for the host OS into bin/
 task darwin:package       # release bundle bin/FlashIt.app (APPLE_SIGNING_IDENTITY, or ad hoc)
 task darwin:updater:archive VERSION=x.y.z   # bin/flashit-<ver>-darwin-<arch>.tar.gz, the updater archive
-build/updater/harness.sh build-macos|build-linux|serve|run-macos|run-linux   # local updater test, see DEV_SETUP.md
 task linux:package        # on Linux, for the host arch: bin/flashit_<ver>_<arch>.deb and bin/flashit-<ver>-1.<rpmarch>.rpm; VERSION=1.2.3 overrides git describe
 sudo build/linux/smoke-test.sh bin/flashit_*.deb [ver]   # install, check layout and polkit action, purge; CI runs the same script (rpm in fedora:latest)
 gh workflow run package-linux.yml --ref <branch> [-f version=1.2.3]   # amd64 + arm64 packages, smoke-tested, as artifacts linux-amd64, linux-arm64, linux-sha256sums
@@ -148,14 +144,10 @@ workflow artifacts (14 days). `package-macos.yml` takes `signing`: `adhoc`
 by default when run by hand, `developer-id` from the release, which signs,
 notarizes and staples and fails at once if an Apple secret is missing. It
 never falls back to ad hoc. A `v*` tag runs `release.yml`: resolve the
-version, call the three, sign `manifest.json` over the two macOS updater
-archives and one deb per Linux arch, verify it against
-`build/updater/updater.key.pub`, check it holds exactly darwin/arm64,
-darwin/amd64, linux/arm64 and linux/amd64, then publish everything with
-one `SHA256SUMS`. A version with a `-suffix` publishes as a prerelease,
-which `releases/latest` (and so the updater) skips. Run by hand,
-`release.yml` is a dry run: no publish, manifest signed with a key made for
-the run.
+version, call the three, then publish everything with one `SHA256SUMS`
+in plain `sha256sum` format, which the updater reads. A version with a
+`-suffix` publishes as a prerelease, which `releases/latest` (and so the
+updater) skips. Run by hand, `release.yml` is a dry run: no publish.
 
 ## Updater
 
@@ -164,42 +156,24 @@ updater (`pkg/updater`), which swaps the app by relaunching it in its own
 helper mode; the **privileged helper** is `cmd/flashit-helper`. Say
 "updater" and "privileged helper" in code, docs and UI.
 
-- macOS: full update. Checks
-  `releases/latest/download/manifest.json` 10 s after start and every
-  6 h, downloads `flashit-<ver>-darwin-<arch>.tar.gz`, verifies, unpacks
-  `FlashIt.app` and offers "Restart to update". The privileged helper is
-  inside the bundle and updates with it. A copy the updater could not
-  swap (run from the DMG, translocated, or in a folder the user cannot
-  write) gets the Linux notice instead.
-- Linux: notify only, "FlashIt X is available" and "View release". It
-  never downloads: `/usr/bin` is the package manager's.
-- Windows and any `Version` that is not a plain `X.Y.Z` (`dev`, git
-  describe, `0.0.0-dev.N`): off.
+macOS release builds only: `main.go` sets it up when `GOOS` is darwin and
+`Version` is a plain `X.Y.Z` (not `dev`, git describe or `0.0.0-dev.N`).
+It is the Wails GitHub provider on `kyleaupton/flashit` with the built-in
+window, as in the Wails self-update tutorial. It reads `releases/latest`,
+its default matcher picks `flashit-<ver>-darwin-<arch>.tar.gz` (the DMGs
+say `macos`), and it checks the archive against its line in `SHA256SUMS`
+(with no such line it installs unchecked, silently). A silent
+`Check` runs 5 s after start and opens the window through
+`CheckAndInstall` only when a release is found; FlashIt › Check for
+Updates… runs `CheckAndInstall` directly, so it also shows "up to date".
+No `CheckInterval`. The privileged helper is inside the bundle and updates
+with it. Linux (root-owned `/usr/bin`, update via the package) and Windows
+(its own plan later) have no updater.
 
-`internal/update` never sets `CheckInterval` or calls `CheckAndInstall`:
-that path downloads on every platform and listens for restart events any
-page can emit. The manifest is unsigned; only each artifact's bytes are.
-So the guard provider refuses any artifact that is not ed25519ph-signed,
-any version that is not `X.Y.Z`, a darwin artifact under any name or URL
-but `flashit-<ver>-darwin-<arch>.tar.gz` in that version's release, and
-more bytes than the manifest's size (512 MiB cap). Before offering the
-restart, `CheckBundle` requires the unpacked bundle to be `FlashIt.app`,
-`dev.kyleupton.flashit`, at the manifest's version (a signed old release
-replayed as new fails here), pass `codesign --verify --deep --strict`, and
-carry the running app's Team ID when it is team-signed (an unreadable
-signature refuses). A failed restart discards the staged bundle, so the
-next check downloads again. Never restart during a
-job: `UpdateService.Restart` takes `JobGate`, which refuses while a job is
-pending, running or being planned, and blocks new jobs from then on.
-
-Key custody: `build/updater/updater.key.pub` is the only trust root and is
-committed. The private key is the Actions secret `UPDATER_PRIVATE_KEY`
-(and Kyle's password manager); only the release `manifest` job reads it,
-from a 0600 file deleted in an `always()` step. Never create, read or
-print it. The `updatertest` build tag swaps in a throwaway key from
-`bin/updatertest/key/` and honours `FLASHIT_UPDATE_URL`;
-`check-release-binary.sh` fails every package workflow whose binary has
-that string or lacks the committed key.
+Accepted, not guarded: restarting during a flash kills the flash; a copy
+run from the DMG or from a folder the user cannot write fails the swap and
+relaunches the old version; updates are unsigned, and the SHA-256 only
+catches corruption.
 
 ## Job execution flow
 
