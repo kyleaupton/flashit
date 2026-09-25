@@ -1,4 +1,4 @@
-* text=auto
+* text=auto eol=lf
 
 build/** linguist-generated
 frontend/src/components/ui/** linguist-generated

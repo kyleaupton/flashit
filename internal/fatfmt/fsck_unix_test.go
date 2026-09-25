@@ -112,7 +112,10 @@ func TestMtoolsRoundTrip(t *testing.T) {
 
 	src := t.TempDir()
 	files := map[string]int64{
-		"sources/install.swm":  4<<30 - 1,
+		// Not 4 GiB - 1: at 8 KiB clusters its chain is exactly 2^32 bytes,
+		// which fsck.fat 4.2 wraps to 0 and reports as broken even on a
+		// mkfs.fat volume.
+		"sources/install.swm":  4<<30 - 1<<20,
 		"sources/install2.swm": 1 << 30,
 		"efi/boot/bootx64.efi": 1<<20 + 17,
 		"setup.exe":            12345,
