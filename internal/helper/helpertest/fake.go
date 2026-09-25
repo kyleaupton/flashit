@@ -16,18 +16,9 @@ import (
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
-const (
-	// Removable is a 1 MiB removable whole disk with two partitions.
-	Removable = "/dev/sdb"
-	// RemovableLink is a symlink that Stat resolves to Removable.
-	RemovableLink = "/dev/disk/by-id/usb-Fake"
-	// Internal is a non-removable whole disk.
-	Internal = "/dev/sda"
-	// System is the whole disk backing "/".
-	System = "/dev/nvme0n1"
-	// RemovableSize is the size of Removable in bytes.
-	RemovableSize = 1 << 20
-)
+// RemovableSize is the size of Removable in bytes. The device paths are in
+// paths_*.go, since validate only accepts the host's own form.
+const RemovableSize = 1 << 20
 
 type FormatCall struct {
 	Device, FS, Label string
