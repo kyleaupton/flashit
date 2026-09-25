@@ -60,6 +60,9 @@ func TestVHD(t *testing.T) {
 		}
 	})
 
+	// Past the gate, let openForWrite's recheck accept the VHD's bus too.
+	d.busOK = func(bus uint32) bool { return bus == validate.BusFileBackedVirtual || validate.RemovableBus(bus) }
+
 	t.Run("write image", func(t *testing.T) {
 		img := make([]byte, 8<<20+2048)
 		if _, err := rand.Read(img); err != nil {

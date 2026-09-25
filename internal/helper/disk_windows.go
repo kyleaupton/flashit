@@ -28,6 +28,9 @@ type windowsDisk struct {
 	log          *slog.Logger
 	lockAttempts int
 	lockRetry    time.Duration
+	// busOK replaces validate.RemovableBus in openForWrite's recheck. Only
+	// the VHD test sets it; nil everywhere else.
+	busOK func(uint32) bool
 }
 
 // NewDisk returns the Win32-backed Disk. Every path it is given has passed
@@ -276,7 +279,11 @@ func (d *windowsDisk) openForWrite(ctx context.Context, device string) (windows.
 		locks.release()
 		return windows.InvalidHandle, nil, fmt.Errorf("%s is not disk %d (%d, %v)", device, n, got, err)
 	}
-	if bus, err := busType(h); err != nil || !validate.RemovableBus(bus) {
+	busOK := validate.RemovableBus
+	if d.busOK != nil {
+		busOK = d.busOK
+	}
+	if bus, err := busType(h); err != nil || !busOK(bus) {
 		windows.CloseHandle(h)
 		locks.release()
 		return windows.InvalidHandle, nil, fmt.Errorf("%s is no longer a removable disk (bus %#x, %v)", device, bus, err)
