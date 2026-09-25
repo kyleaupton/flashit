@@ -85,13 +85,6 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
-// Active reports whether a job is pending or running.
-func (m *Manager) Active() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.active()
-}
-
 // Busy is ErrJobActive while a job is pending or running, ErrBlocked while
 // jobs are blocked, and nil when a new job may start.
 func (m *Manager) Busy() error {

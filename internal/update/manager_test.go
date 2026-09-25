@@ -228,8 +228,49 @@ func TestMac_RestartFailureLetsJobsRunAgain(t *testing.T) {
 	if gate.released != 1 {
 		t.Fatal("jobs stay blocked after a failed restart")
 	}
-	if s := m.State(); s.Status != StatusReady {
-		t.Fatalf("state = %q, want ready", s.Status)
+	if s := m.State(); s.Status != StatusError {
+		t.Fatalf("state = %q, want error", s.Status)
+	}
+	// The next check downloads again rather than offering a staged bundle
+	// that may be gone.
+	if s := m.Check(context.Background()); s.Status != StatusReady || eng.downloads != 2 {
+		t.Fatalf("state = %q after %d downloads, want ready after 2", s.Status, eng.downloads)
+	}
+}
+
+func TestMac_UnwritableCopyOnlyNotifies(t *testing.T) {
+	eng := &fakeEngine{rel: release("1.2.4")}
+	gate := &fakeGate{}
+	m := NewManager(ManagerConfig{Mode: Install, Current: "1.2.3", Engine: eng, Gate: gate, CheckStaged: stagedOK,
+		CanInstall: func() error { return errors.New("running from the DMG") }})
+
+	if s := m.Check(context.Background()); s.Status != StatusAvailable || s.ReleaseURL == "" {
+		t.Fatalf("state = %+v, want available with a release URL", s)
+	}
+	if err := m.Restart(context.Background()); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("Restart = %v, want ErrNotReady", err)
+	}
+	if eng.downloads != 0 || eng.restarts != 0 {
+		t.Fatal("downloaded or restarted a copy that cannot be replaced")
+	}
+}
+
+func TestLinux_NoticeSurvivesFailedRecheck(t *testing.T) {
+	eng := &fakeEngine{rel: release("1.2.4")}
+	var emitted []State
+	m := NewManager(ManagerConfig{Mode: Notify, Current: "1.2.3", Engine: eng, Gate: &fakeGate{},
+		Emit: func(s State) { emitted = append(emitted, s) }})
+	m.Check(context.Background())
+	emitted = nil
+
+	eng.checkErr = errors.New("offline")
+	if s := m.Check(context.Background()); s.Status != StatusAvailable || s.Version != "1.2.4" {
+		t.Fatalf("state = %+v, want the notice kept", s)
+	}
+	for _, s := range emitted {
+		if s.Status != StatusAvailable {
+			t.Fatalf("emitted %q during the re-check", s.Status)
+		}
 	}
 }
 

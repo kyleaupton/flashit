@@ -175,7 +175,7 @@ func TestEndToEnd_MacInstallsSignedUpdate(t *testing.T) {
 	srv.publish(t, "0.0.2", signed(srv.URL+"/"+name, "darwin", body, key.priv))
 
 	u := updater.New(&fakeHost{})
-	m, err := setup(u, srv.config("darwin", key.pub), checkBundleInfo)
+	m, err := setup(u, srv.config("darwin", key.pub), checkBundleInfo, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +251,7 @@ func TestEndToEnd_MacRefuses(t *testing.T) {
 			srv := newServer(t)
 			arrange(srv)
 			u := updater.New(&fakeHost{})
-			m, err := setup(u, srv.config("darwin", key.pub), checkBundleInfo)
+			m, err := setup(u, srv.config("darwin", key.pub), checkBundleInfo, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -281,7 +281,7 @@ func TestEndToEnd_LinuxNotifiesWithoutDownloading(t *testing.T) {
 	cfg := srv.config("linux", key.pub)
 	cfg.Emit = func(s State) { emitted = append(emitted, s) }
 	u := updater.New(&fakeHost{})
-	m, err := setup(u, cfg, CheckBundle)
+	m, err := setup(u, cfg, CheckBundle, CanInstall)
 	if err != nil {
 		t.Fatal(err)
 	}

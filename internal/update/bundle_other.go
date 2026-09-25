@@ -8,3 +8,7 @@ import "errors"
 func CheckBundle(path, version string) error {
 	return errors.New("updates are only installed on macOS")
 }
+
+func CanInstall() error {
+	return errors.New("updates are only installed on macOS")
+}

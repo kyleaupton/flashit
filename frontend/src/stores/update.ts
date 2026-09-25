@@ -45,26 +45,37 @@ export const useUpdateStore = defineStore('update', () => {
   )
 
   let unsubscribe: (() => void)[] = []
+  let sawEvent = false
+  // The loading toast of a check asked for from the menu, while it runs.
+  let manualToast: string | number | null = null
 
   async function init(): Promise<void> {
     if (unsubscribe.length) return
     unsubscribe = [
       Events.On('update:state', (ev: Events.WailsEvent) => {
+        sawEvent = true
         state.value = State.createFrom(ev.data)
+        if (manualToast !== null && state.value.status === Status.StatusDownloading) {
+          toast.loading(`Downloading FlashIt ${state.value.version}…`, { id: manualToast })
+        }
       }),
       Events.On('update:check-requested', () => {
         void checkNow()
       }),
     ]
     try {
-      state.value = await GetState()
+      const s = await GetState()
+      // An event that arrived meanwhile is newer than this snapshot.
+      if (!sawEvent) state.value = s
     } catch (e) {
       console.error('update state:', e)
     }
   }
 
   async function checkNow(): Promise<void> {
+    if (manualToast !== null) return
     const id = toast.loading('Checking for updates…')
+    manualToast = id
     try {
       const s = await CheckNow()
       state.value = s
@@ -83,6 +94,12 @@ export const useUpdateStore = defineStore('update', () => {
           writeDismissed(null)
           toast.dismiss(id)
           break
+        case Status.StatusChecking:
+        case Status.StatusDownloading:
+          // A background check was already under way; its result arrives as
+          // a state event.
+          toast.info('Already checking for updates', { id })
+          break
         default:
           toast.dismiss(id)
       }
@@ -91,6 +108,8 @@ export const useUpdateStore = defineStore('update', () => {
         id,
         description: e instanceof Error ? e.message : String(e),
       })
+    } finally {
+      manualToast = null
     }
   }
 

@@ -123,12 +123,17 @@ func releasePage(version string) string {
 
 const maxNotes = 4000
 
+// manifestTimeout bounds a check; the archive download has the HTTP
+// client's longer one.
+const manifestTimeout = time.Minute
+
 type Manager struct {
 	mode        Mode
 	engine      Engine
 	gate        JobGate
 	emit        func(State)
 	checkStaged func(path, version string) error
+	canInstall  func() error
 
 	mu    sync.Mutex
 	state State
@@ -144,6 +149,10 @@ type ManagerConfig struct {
 	// CheckStaged vets the unpacked update before it can be restarted
 	// into. Required in Install mode.
 	CheckStaged func(path, version string) error
+	// CanInstall reports why this copy cannot be swapped, such as running
+	// from the DMG or a folder the user cannot write. Such a copy gets the
+	// Linux notice instead. Nil means it always can.
+	CanInstall func() error
 }
 
 func NewManager(cfg ManagerConfig) *Manager {
@@ -157,6 +166,7 @@ func NewManager(cfg ManagerConfig) *Manager {
 		gate:        cfg.Gate,
 		emit:        emit,
 		checkStaged: cfg.CheckStaged,
+		canInstall:  cfg.CanInstall,
 		state:       State{Mode: cfg.Mode, Status: StatusIdle, Current: cfg.Current},
 	}
 }
@@ -177,12 +187,12 @@ type Config struct {
 // CheckAndInstall, which downloads on every platform and subscribes to
 // restart events any page can emit. Run polls instead.
 func New(u *updater.Updater, cfg Config) (*Manager, error) {
-	return setup(u, cfg, CheckBundle)
+	return setup(u, cfg, CheckBundle, CanInstall)
 }
 
-func setup(u *updater.Updater, cfg Config, checkStaged func(path, version string) error) (*Manager, error) {
+func setup(u *updater.Updater, cfg Config, checkStaged func(path, version string) error, canInstall func() error) (*Manager, error) {
 	mode := ModeFor(cfg.GOOS, cfg.Version)
-	mc := ManagerConfig{Mode: mode, Current: cfg.Version, Engine: u, Gate: cfg.Gate, Emit: cfg.Emit, CheckStaged: checkStaged}
+	mc := ManagerConfig{Mode: mode, Current: cfg.Version, Engine: u, Gate: cfg.Gate, Emit: cfg.Emit, CheckStaged: checkStaged, CanInstall: canInstall}
 	if mode == Off {
 		return NewManager(mc), nil
 	}
@@ -256,6 +266,7 @@ func (m *Manager) Check(ctx context.Context) State {
 		return s
 	}
 	m.busy = true
+	prev := m.state
 	m.mu.Unlock()
 	defer func() {
 		m.mu.Lock()
@@ -263,9 +274,20 @@ func (m *Manager) Check(ctx context.Context) State {
 		m.mu.Unlock()
 	}()
 
-	m.set(func(s *State) { s.Status, s.Error = StatusChecking, "" })
-	rel, err := m.engine.Check(ctx)
+	// A notice already shown stays up while its re-check runs, and through
+	// a re-check that fails.
+	shown := prev.Status == StatusAvailable
+	if !shown {
+		m.set(func(s *State) { s.Status, s.Error = StatusChecking, "" })
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, manifestTimeout)
+	rel, err := m.engine.Check(checkCtx)
+	cancel()
 	if err != nil {
+		if shown {
+			logger.Warn("update check failed", "error", err)
+			return m.State()
+		}
 		return m.fail("check", err)
 	}
 	if rel == nil {
@@ -287,6 +309,12 @@ func (m *Manager) Check(ctx context.Context) State {
 	}
 	if m.mode == Notify {
 		return m.set(found(StatusAvailable))
+	}
+	if m.canInstall != nil {
+		if err := m.canInstall(); err != nil {
+			logger.Info("update found but this copy cannot be replaced", "reason", err)
+			return m.set(found(StatusAvailable))
+		}
 	}
 
 	m.set(found(StatusDownloading))
@@ -336,7 +364,10 @@ func (m *Manager) Restart(ctx context.Context) error {
 
 	if err := m.engine.Restart(ctx); err != nil {
 		release()
-		m.set(func(s *State) { s.Status = StatusReady })
+		// The staged bundle may be what failed (temp cleanup took it), so
+		// the next check downloads afresh rather than offering it again.
+		discard(m.engine.DownloadedPath())
+		m.fail("restart", err)
 		return fmt.Errorf("restart: %w", err)
 	}
 	return nil

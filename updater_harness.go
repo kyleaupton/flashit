@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	_ "embed"
@@ -54,12 +55,15 @@ func harnessHooks(mgr *update.Manager) func(update.State) {
 	write("started mode=" + string(mgr.Mode()) + " manifest=" + manifest)
 
 	autorestart := os.Getenv("FLASHIT_UPDATE_AUTORESTART") == "1"
+	var once sync.Once
 	return func(s update.State) {
 		write(fmt.Sprintf("status=%s found=%s error=%q", s.Status, s.Version, s.Error))
 		if autorestart && s.Status == update.StatusReady {
-			go func() {
-				write(fmt.Sprintf("autorestart err=%v", mgr.Restart(context.Background())))
-			}()
+			once.Do(func() {
+				go func() {
+					write(fmt.Sprintf("autorestart err=%v", mgr.Restart(context.Background())))
+				}()
+			})
 		}
 	}
 }

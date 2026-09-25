@@ -62,10 +62,10 @@ cmd/wimtest/                 CLI for exercising the WIM splitter
 cmd/isotest/                 CLI comparing isofs with the host mount, per file size and SHA-256
 helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
-build/                       Per-platform Taskfiles and packaging config
+build/                       Per-platform Taskfiles and packaging config; build/linux holds nfpm.yaml, the polkit policy, the desktop file, icons and smoke-test.sh
 build/updater/               updater.key.pub (the update trust root), harness.sh, check-release-binary.sh
 updater_release.go, updater_harness.go  Update source per build tag (updatertest is the harness)
-.github/workflows/           ci.yml; package-{macos,windows,linux}.yml; release.yml; build/linux holds nfpm.yaml, the polkit policy, the desktop file, icons and smoke-test.sh
+.github/workflows/           ci.yml; package-{macos,windows,linux}.yml; release.yml
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
 
@@ -168,7 +168,9 @@ helper mode; the **privileged helper** is `cmd/flashit-helper`. Say
   `releases/latest/download/manifest.json` 10 s after start and every
   6 h, downloads `flashit-<ver>-darwin-<arch>.tar.gz`, verifies, unpacks
   `FlashIt.app` and offers "Restart to update". The privileged helper is
-  inside the bundle and updates with it.
+  inside the bundle and updates with it. A copy the updater could not
+  swap (run from the DMG, translocated, or in a folder the user cannot
+  write) gets the Linux notice instead.
 - Linux: notify only, "FlashIt X is available" and "View release". It
   never downloads: `/usr/bin` is the package manager's.
 - Windows and any `Version` that is not a plain `X.Y.Z` (`dev`, git
@@ -184,7 +186,9 @@ more bytes than the manifest's size (512 MiB cap). Before offering the
 restart, `CheckBundle` requires the unpacked bundle to be `FlashIt.app`,
 `dev.kyleupton.flashit`, at the manifest's version (a signed old release
 replayed as new fails here), pass `codesign --verify --deep --strict`, and
-carry the running app's Team ID when it has one. Never restart during a
+carry the running app's Team ID when it is team-signed (an unreadable
+signature refuses). A failed restart discards the staged bundle, so the
+next check downloads again. Never restart during a
 job: `UpdateService.Restart` takes `JobGate`, which refuses while a job is
 pending, running or being planned, and blocks new jobs from then on.
 
