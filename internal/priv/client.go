@@ -55,12 +55,14 @@ func (c *Client) Ping(ctx context.Context) (proto.PingResult, error) {
 }
 
 // WriteImage streams image onto p.Device. The open file itself is handed to
-// the helper with the request, so the helper writes exactly this file; the
-// caller keeps ownership and closes it afterwards.
+// the helper with the request (a passed descriptor on unix, a handle value
+// the helper duplicates on Windows), so the helper writes exactly this file;
+// the caller keeps ownership and closes it afterwards.
 func (c *Client) WriteImage(ctx context.Context, p proto.WriteImageParams, image *os.File, progress ProgressFunc) error {
 	if image == nil {
 		return errors.New("write_image needs an open image")
 	}
+	p.Handle = imageHandle(image)
 	_, err := c.do(ctx, proto.OpWriteImage, p, []int{int(image.Fd())}, progress)
 	return err
 }

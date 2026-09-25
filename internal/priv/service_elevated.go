@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || windows
 
 package priv
 
@@ -18,21 +18,23 @@ import (
 // app does not override.
 const keepaliveInterval = 20 * time.Second
 
-type linuxService struct {
+// elevatedService runs the helper as root or admin for the whole job: one
+// polkit or UAC prompt at EnsureReady, then a session kept alive by Hold.
+type elevatedService struct {
 	mu     sync.Mutex
 	proc   *helperProcess
 	client *Client
 	hold   *keepalive
 }
 
-func platformService() PrivilegedService { return &linuxService{} }
+func platformService() PrivilegedService { return &elevatedService{} }
 
 // EnsureReady reuses a live helper and otherwise spawns one, which raises the
-// polkit prompt. The helper exits on idle, so a stale client is expected
+// polkit or UAC prompt. The helper exits on idle, so a stale client is expected
 // between jobs and simply replaced. A released helper that has not exited
-// yet blocks a new spawn: the app cannot kill root, so it must not stack a
-// second one.
-func (s *linuxService) EnsureReady(ctx context.Context) error {
+// yet blocks a new spawn: the app cannot kill an elevated process, so it
+// must not stack a second one.
+func (s *elevatedService) EnsureReady(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -73,19 +75,19 @@ func (s *linuxService) EnsureReady(ctx context.Context) error {
 	return nil
 }
 
-func (s *linuxService) Disk() DiskOps {
+func (s *elevatedService) Disk() DiskOps {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.client == nil {
 		return unavailableDiskOps{}
 	}
-	return &linuxDiskOps{client: s.client}
+	return &elevatedDiskOps{client: s.client}
 }
 
 // Hold pings the current session until release. Respawning would cost a
-// second polkit prompt, so a helper that is already gone stays gone and the
+// second prompt, so a helper that is already gone stays gone and the
 // next op reports it.
-func (s *linuxService) Hold() func() {
+func (s *elevatedService) Hold() func() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.stopHold()
@@ -104,14 +106,14 @@ func (s *linuxService) Hold() func() {
 	}
 }
 
-func (s *linuxService) stopHold() {
+func (s *elevatedService) stopHold() {
 	if s.hold != nil {
 		s.hold.stop()
 		s.hold = nil
 	}
 }
 
-func (s *linuxService) Shutdown(ctx context.Context) error {
+func (s *elevatedService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.dropClient()
@@ -120,7 +122,7 @@ func (s *linuxService) Shutdown(ctx context.Context) error {
 
 // dropClient closes the session and releases the helper; proc stays set
 // until it has actually exited.
-func (s *linuxService) dropClient() {
+func (s *elevatedService) dropClient() {
 	s.stopHold()
 	if s.client != nil {
 		s.client.Close()
@@ -131,11 +133,11 @@ func (s *linuxService) dropClient() {
 	}
 }
 
-type linuxDiskOps struct {
+type elevatedDiskOps struct {
 	client *Client
 }
 
-func (d *linuxDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
+func (d *elevatedDiskOps) WriteISO(ctx context.Context, isoPath string, device string, progress ProgressFunc) error {
 	image, err := os.Open(isoPath)
 	if err != nil {
 		return err
@@ -148,15 +150,15 @@ func (d *linuxDiskOps) WriteISO(ctx context.Context, isoPath string, device stri
 	return d.client.WriteImage(ctx, proto.WriteImageParams{Device: device, Size: fi.Size()}, image, progress)
 }
 
-func (d *linuxDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
+func (d *elevatedDiskOps) FormatDisk(ctx context.Context, device string, filesystem string, volumeName string) error {
 	_, err := d.client.FormatDisk(ctx, proto.FormatDiskParams{Device: device, Filesystem: filesystem, Label: volumeName})
 	return err
 }
 
-func (d *linuxDiskOps) Eject(ctx context.Context, device string) error {
+func (d *elevatedDiskOps) Eject(ctx context.Context, device string) error {
 	return d.client.Eject(ctx, device)
 }
 
-func (d *linuxDiskOps) Unmount(ctx context.Context, device string) error {
+func (d *elevatedDiskOps) Unmount(ctx context.Context, device string) error {
 	return d.client.Unmount(ctx, device)
 }

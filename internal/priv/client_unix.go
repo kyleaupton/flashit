@@ -4,6 +4,7 @@ package priv
 
 import (
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -22,3 +23,6 @@ func writeWithFDs(conn net.Conn, line []byte, fds []int) error {
 	_, _, err := mc.WriteMsgUnix(line, syscall.UnixRights(fds...), nil)
 	return err
 }
+
+// imageHandle is 0: the descriptor travels with the request instead.
+func imageHandle(*os.File) uint64 { return 0 }
