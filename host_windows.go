@@ -1,7 +1,6 @@
 package main
 
 import (
-	"io"
 	"log/slog"
 	"os"
 
@@ -26,5 +25,15 @@ func appLogger() *slog.Logger {
 	if err != nil {
 		return nil
 	}
-	return slog.New(slog.NewTextHandler(io.MultiWriter(os.Stderr, f), &slog.HandlerOptions{Level: slog.LevelInfo}))
+	return slog.New(slog.NewTextHandler(teeFile{f}, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+// teeFile writes to the file and, best effort, to stderr, which in a
+// windowsgui build is handle 0 and fails every write; io.MultiWriter would
+// stop there and never reach the file.
+type teeFile struct{ f *os.File }
+
+func (t teeFile) Write(p []byte) (int, error) {
+	_, _ = os.Stderr.Write(p)
+	return t.f.Write(p)
 }
