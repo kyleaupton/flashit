@@ -47,7 +47,7 @@ func TestDevicePath(t *testing.T) {
 		{"/dev/sdb\x00", proto.CodeInvalidDevice},
 	}
 	for _, c := range cases {
-		got, err := DevicePath(c.in)
+		got, err := UnixDevicePath(c.in)
 		wantCode(t, err, c.want)
 		if c.want == "" && got != c.in {
 			t.Fatalf("DevicePath(%q) = %q", c.in, got)
@@ -78,7 +78,7 @@ func TestTarget(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			wantCode(t, Target(c.info, c.sys), c.want)
+			wantCode(t, target(UnixDevicePath, c.info, c.sys), c.want)
 		})
 	}
 }
@@ -130,6 +130,11 @@ func TestFilesystem(t *testing.T) {
 }
 
 func TestMountpoint(t *testing.T) {
+	if MountRoot == "" {
+		_, err := Mountpoint(`E:\\`)
+		wantCode(t, err, proto.CodeInvalidRequest)
+		return
+	}
 	cases := []struct {
 		in   string
 		want proto.ErrorCode

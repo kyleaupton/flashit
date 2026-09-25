@@ -233,8 +233,20 @@ func (sess *session) mountDirs(mt MountTable, info DeviceInfo) []string {
 // device. The helper never opens the image by path: whatever the app could
 // open is what gets written, and nothing else.
 func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteImageParams, src *os.File) error {
+	if src == nil && p.Handle != 0 && sess.s.opts.Images != nil {
+		img, err := sess.s.opts.Images.Image(p.Handle, p.Size)
+		if err != nil {
+			var pe *proto.Error
+			if errors.As(err, &pe) {
+				return pe
+			}
+			return proto.Errorf(proto.CodeInvalidSource, "image handle: %v", err)
+		}
+		defer img.Close()
+		src = img
+	}
 	if src == nil {
-		return proto.NewError(proto.CodeInvalidRequest, "write_image must carry the image as a passed file descriptor")
+		return proto.NewError(proto.CodeInvalidRequest, "write_image must carry the image as a passed file")
 	}
 	info, err := sess.resolveTarget(proto.OpWriteImage, p.Device)
 	if err != nil {
@@ -260,7 +272,8 @@ func (sess *session) writeImage(ctx context.Context, id string, p proto.WriteIma
 	}
 
 	sess.s.opts.Logger.Info("writing image", "device", info.Path, "bytes", p.Size)
-	if err := sess.stream(ctx, id, src, dst, p.Size); err != nil {
+	// Positional reads: the app shares this file's offset with us.
+	if err := sess.stream(ctx, id, io.NewSectionReader(src, 0, p.Size), dst, p.Size); err != nil {
 		dst.Close()
 		return err
 	}
@@ -377,14 +390,17 @@ func (sess *session) unmount(ctx context.Context, p proto.UnmountParams) error {
 }
 
 // eject detaches the device. Where the OS eject unmounts on its own
-// (macOS) that is all it does. Elsewhere it unmounts first, and once that
-// has worked a failing OS eject is only logged: the stick is safe to pull.
+// (macOS) that is all it does. Elsewhere (Linux, Windows) it unmounts first,
+// and once that has worked a failing OS eject is only logged: the stick is
+// safe to pull.
 func (sess *session) eject(ctx context.Context, p proto.EjectParams) error {
 	info, err := sess.resolveTarget(proto.OpEject, p.Device)
 	if err != nil {
 		return err
 	}
-	if _, ok := sess.s.disk.(MountTable); !ok {
+	_, mt := sess.s.disk.(MountTable)
+	_, ub := sess.s.disk.(UnmountsBeforeEject)
+	if !mt && !ub {
 		if err := sess.s.disk.Eject(info.Path); err != nil {
 			return proto.Errorf(proto.CodeInternal, "eject %s: %v", info.Path, err)
 		}

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"syscall"
 
@@ -187,6 +188,43 @@ func (d *FakeDisk) Snapshot() []string {
 // like a host whose eject unmounts on its own (macOS).
 type NoMountTable struct {
 	helper.Disk
+}
+
+// UnmountFirst hides FakeDisk's MountTable methods but unmounts before
+// ejecting, like the Windows disk.
+type UnmountFirst struct {
+	helper.Disk
+}
+
+func (UnmountFirst) UnmountsBeforeEject() {}
+
+// FakeImages is an ImageSource that opens Files[handle] for reading, as the
+// Windows helper duplicates a handle. It records every request.
+type FakeImages struct {
+	mu     sync.Mutex
+	Files  map[uint64]string
+	Err    error
+	Asked  []uint64
+	Opened []*os.File
+}
+
+func (f *FakeImages) Image(handle uint64, size int64) (*os.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Asked = append(f.Asked, handle)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	path, ok := f.Files[handle]
+	if !ok {
+		return nil, fmt.Errorf("no handle %d in the parent", handle)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	f.Opened = append(f.Opened, file)
+	return file, nil
 }
 
 // FakeRaw records what was written to a device. Block, when set, makes every

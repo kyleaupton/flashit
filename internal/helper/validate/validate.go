@@ -4,6 +4,7 @@ package validate
 
 import (
 	"io/fs"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -26,31 +27,35 @@ const devRoot = "/dev/"
 
 var labelRe = regexp.MustCompile(`^[A-Za-z0-9_ -]{1,11}$`)
 
-// DevicePath rejects anything that is not a clean absolute path under /dev.
-// It runs on the path the client sent and again on the canonical path the OS
-// resolved it to.
-func DevicePath(path string) (string, error) {
-	if path == "" {
+// DevicePath checks a device path by the host's rule: a clean absolute path
+// under /dev on unix, exactly \\.\PhysicalDriveN on Windows. It runs on the
+// path the client sent and again on the canonical path the OS resolved it to.
+func DevicePath(path string) (string, error) { return hostDevicePath(path) }
+
+// UnixDevicePath rejects anything that is not a clean absolute path under
+// /dev.
+func UnixDevicePath(p string) (string, error) {
+	if p == "" {
 		return "", proto.NewError(proto.CodeInvalidDevice, "device path is empty")
 	}
-	if strings.ContainsRune(path, 0) {
+	if strings.ContainsRune(p, 0) {
 		return "", proto.NewError(proto.CodeInvalidDevice, "device path contains NUL")
 	}
-	if !filepath.IsAbs(path) {
-		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not absolute", path)
+	if !path.IsAbs(p) {
+		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not absolute", p)
 	}
-	for _, part := range strings.Split(path, "/") {
+	for _, part := range strings.Split(p, "/") {
 		if part == ".." || part == "." {
-			return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q contains %q", path, part)
+			return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q contains %q", p, part)
 		}
 	}
-	clean := filepath.Clean(path)
-	if clean != path {
-		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not canonical", path)
+	clean := path.Clean(p)
+	if clean != p {
+		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not canonical", p)
 	}
 	rest := strings.TrimPrefix(clean, devRoot)
 	if rest == clean || rest == "" {
-		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not under /dev", path)
+		return "", proto.Errorf(proto.CodeInvalidDevice, "device path %q is not under /dev", p)
 	}
 	return clean, nil
 }
@@ -60,7 +65,11 @@ func DevicePath(path string) (string, error) {
 // mount. An empty systemDisks list means the OS could not tell us what the
 // system disk is, and that refuses everything.
 func Target(info DeviceInfo, systemDisks []string) error {
-	if _, err := DevicePath(info.Path); err != nil {
+	return target(DevicePath, info, systemDisks)
+}
+
+func target(devicePath func(string) (string, error), info DeviceInfo, systemDisks []string) error {
+	if _, err := devicePath(info.Path); err != nil {
 		return err
 	}
 	if !info.IsBlock {
@@ -131,6 +140,9 @@ func Filesystem(fs string) (string, error) {
 // Mountpoint accepts only a directory format_disk could have created:
 // MountRoot followed by one valid label.
 func Mountpoint(path string) (string, error) {
+	if MountRoot == "" {
+		return "", proto.NewError(proto.CodeInvalidRequest, "this host does not unmount by mountpoint")
+	}
 	if path == "" || strings.ContainsRune(path, 0) || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 		return "", proto.Errorf(proto.CodeInvalidRequest, "mountpoint %q is not a clean absolute path", path)
 	}

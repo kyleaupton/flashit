@@ -9,6 +9,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 
 	"github.com/kyleaupton/flashit/internal/helper/validate"
 	"github.com/kyleaupton/flashit/internal/proto"
@@ -60,6 +61,21 @@ type MountTable interface {
 	// RemoveMountDir removes dir only if it is an empty, unmounted, real
 	// directory directly under validate.MountRoot.
 	RemoveMountDir(dir string) error
+}
+
+// UnmountsBeforeEject is implemented by a Disk whose Eject does not unmount
+// on its own but that keeps no mount directories (Windows): eject unmounts
+// first, as on a MountTable host, and treats Eject as best effort.
+type UnmountsBeforeEject interface {
+	UnmountsBeforeEject()
+}
+
+// ImageSource hands the helper the image a write_image names by handle
+// (Windows), duplicated out of the process that sent it. It must return only
+// a regular file of exactly size bytes, opened for reading, and never open a
+// path.
+type ImageSource interface {
+	Image(handle uint64, size int64) (*os.File, error)
 }
 
 // Peer is what caller authentication learned about the connected process.
