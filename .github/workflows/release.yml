@@ -1,10 +1,7 @@
 name: Release
 
 # Tag vX.Y.Z to release. The package workflows build and test each platform;
-# this one signs the update manifest and publishes.
-#
-# Run by hand it is a dry run: everything but the publish, with the manifest
-# signed by a key made for the run instead of UPDATER_PRIVATE_KEY.
+# this one publishes. Run by hand it is a dry run: everything but the publish.
 
 on:
   push:
@@ -52,8 +49,8 @@ jobs:
             echo "::error::version '$version' is not MAJOR.MINOR.PATCH[-PRERELEASE]"
             exit 1
           fi
-          # A prerelease never becomes releases/latest, so installed apps
-          # never see its manifest.
+          # A prerelease never becomes releases/latest, which is all the
+          # updater reads.
           case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
           {
             echo "version=$version"
@@ -93,127 +90,10 @@ jobs:
     with:
       version: ${{ needs.version.outputs.version }}
 
-  # The only job that sees UPDATER_PRIVATE_KEY.
-  manifest:
-    name: Update manifest
-    needs: [version, package-macos, package-linux]
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    env:
-      VERSION: ${{ needs.version.outputs.version }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version-file: go.mod
-
-      - name: Install Wails CLI
-        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
-
-      - name: Download macOS packages
-        uses: actions/download-artifact@v4
-        with:
-          pattern: macos-*
-          merge-multiple: true
-          path: packages
-
-      - name: Download Linux packages
-        uses: actions/download-artifact@v4
-        with:
-          pattern: linux-*
-          merge-multiple: true
-          path: packages
-
-      # Only the macOS updater archives and one deb per Linux arch; the Linux
-      # entries exist so the endpoint provider finds one for the platform.
-      - name: Collect updater artifacts
-        run: |
-          mkdir updater
-          for f in \
-            "flashit-$VERSION-darwin-arm64.tar.gz" \
-            "flashit-$VERSION-darwin-amd64.tar.gz" \
-            "flashit_${VERSION}_amd64.deb" \
-            "flashit_${VERSION}_arm64.deb"; do
-            cp "packages/$f" updater/
-          done
-          ls -l updater
-
-      - name: Write signing key
-        env:
-          EVENT: ${{ github.event_name }}
-          UPDATER_PRIVATE_KEY: ${{ secrets.UPDATER_PRIVATE_KEY }}
-        run: |
-          umask 077
-          key=$RUNNER_TEMP/updater.key
-          if [ "$EVENT" = push ]; then
-            if [ -z "$UPDATER_PRIVATE_KEY" ]; then
-              echo "::error::the UPDATER_PRIVATE_KEY secret is not set"
-              exit 1
-            fi
-            printf '%s\n' "$UPDATER_PRIVATE_KEY" > "$key"
-            cp build/updater/updater.key.pub "$RUNNER_TEMP/updater.key.pub"
-          else
-            # A dry run never signs a non-release build with the real key.
-            wails3 updater genkey -out "$key" -force > /dev/null
-          fi
-          chmod 600 "$key"
-
-      - name: Sign manifest
-        run: |
-          wails3 updater manifest \
-            -version "$VERSION" \
-            -key "$RUNNER_TEMP/updater.key" \
-            -url-prefix "https://github.com/kyleaupton/flashit/releases/download/v$VERSION" \
-            -notes "See https://github.com/kyleaupton/flashit/releases/tag/v$VERSION" \
-            -output updater/manifest.json \
-            updater/
-
-      - name: Delete signing key
-        if: always()
-        run: rm -f "$RUNNER_TEMP/updater.key"
-
-      - name: Verify manifest
-        run: wails3 updater verify -manifest updater/manifest.json -publickey "$RUNNER_TEMP/updater.key.pub"
-
-      - name: Check manifest entries
-        run: |
-          jq . updater/manifest.json
-          got=$(jq -r '.artifacts[] | "\(.platform)/\(.arch)"' updater/manifest.json | sort | paste -sd ' ' -)
-          want="darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
-          if [ "$got" != "$want" ]; then
-            echo "::error::manifest entries are '$got', want '$want'"
-            exit 1
-          fi
-          if [ "$(jq -r .version updater/manifest.json)" != "$VERSION" ]; then
-            echo "::error::manifest version does not match $VERSION"
-            exit 1
-          fi
-          # An entry without a platform or arch matches every platform.
-          if jq -e '.artifacts[] | select((.platform // "") == "" or (.arch // "") == "")' updater/manifest.json > /dev/null; then
-            echo "::error::manifest has an entry that matches every platform"
-            exit 1
-          fi
-          if jq -e '.artifacts[] | select(.signatureAlgo != "ed25519ph" or (.signature // "") == "")' updater/manifest.json > /dev/null; then
-            echo "::error::manifest has an unsigned entry"
-            exit 1
-          fi
-
-      - name: Upload manifest
-        uses: actions/upload-artifact@v4
-        with:
-          name: manifest
-          path: updater/manifest.json
-          if-no-files-found: error
-          retention-days: 14
-
   publish:
     name: Publish
     if: github.event_name == 'push'
-    needs: [version, manifest, package-macos, package-windows, package-linux]
+    needs: [version, package-macos, package-windows, package-linux]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -226,7 +106,9 @@ jobs:
           merge-multiple: true
           path: dist
 
-      # One SHA256SUMS for everything, in place of package-linux's own.
+      # One SHA256SUMS for everything, in place of package-linux's own. The
+      # macOS updater checks its archive against this, so keep the plain
+      # sha256sum format.
       - name: Write SHA256SUMS
         working-directory: dist
         run: |

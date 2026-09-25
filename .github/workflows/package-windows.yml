@@ -83,10 +83,6 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: task windows:build VERSION="$VERSION"
 
-      # No updater on Windows yet, but the binary carries the key all the same.
-      - name: Check the updater key
-        run: build/updater/check-release-binary.sh bin/FlashIt.exe
-
       - name: NSIS installer
         shell: pwsh
         env:
