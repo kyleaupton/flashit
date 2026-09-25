@@ -1,0 +1,213 @@
+name: Package macOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Package version without the v (default 0.0.0-dev.<run number>)
+        type: string
+        default: ''
+      signing:
+        description: adhoc signs with "-" and skips notarization; developer-id signs, notarizes and staples
+        type: choice
+        options: [adhoc, developer-id]
+        default: adhoc
+  workflow_call:
+    inputs:
+      version:
+        description: Package version without the v
+        type: string
+        required: true
+      signing:
+        description: adhoc or developer-id
+        type: string
+        required: true
+    secrets:
+      MACOS_CERTIFICATE:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+      APPLE_SIGNING_IDENTITY:
+        required: false
+      APPLE_TEAM_ID:
+        required: false
+      APPLE_ID:
+        required: false
+      APPLE_APP_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: '22'
+
+jobs:
+  package:
+    name: Package (${{ matrix.arch }}, ${{ inputs.signing }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            label: apple-silicon
+          - arch: amd64
+            label: intel
+
+    steps:
+      # Developer ID never falls back to ad hoc: a missing secret stops the
+      # run here, before anything is built.
+      - name: Check signing inputs
+        env:
+          SIGNING: ${{ inputs.signing }}
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          case "$SIGNING" in
+          adhoc) exit 0 ;;
+          developer-id) ;;
+          *) echo "::error::signing must be adhoc or developer-id, got '$SIGNING'"; exit 1 ;;
+          esac
+          missing=""
+          for name in MACOS_CERTIFICATE MACOS_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_TEAM_ID APPLE_ID APPLE_APP_PASSWORD; do
+            if [ -z "${!name}" ]; then missing="$missing $name"; fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Developer ID signing needs these secrets, which are not set:$missing"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # The version lands in -ldflags, Info.plist and file names, so only a
+      # plain semver gets through.
+      - name: Resolve version
+        id: version
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version=${INPUT_VERSION:-0.0.0-dev.$GITHUB_RUN_NUMBER}
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+            echo "::error::version '$version' is not MAJOR.MINOR.PATCH[-PRERELEASE] without a v"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install Task
+        uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install Wails CLI
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
+
+      - name: Import signing certificate
+        if: inputs.signing == 'developer-id'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+        run: |
+          keychain=$RUNNER_TEMP/build.keychain
+          password=$(openssl rand -base64 32)
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain"
+          security list-keychains -d user -s "$keychain" login.keychain
+          rm -f "$RUNNER_TEMP/certificate.p12"
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+          # Empty for ad hoc, which the Taskfile signs with "-".
+          APPLE_SIGNING_IDENTITY: ${{ inputs.signing == 'developer-id' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+        run: |
+          task darwin:package VERSION="$VERSION" ARCH="$ARCH"
+          lipo -archs bin/FlashIt.app/Contents/MacOS/FlashIt | grep -qx "${ARCH/amd64/x86_64}"
+
+      - name: Check the updater key
+        run: build/updater/check-release-binary.sh bin/FlashIt.app/Contents/MacOS/FlashIt
+
+      - name: Verify code signature
+        run: |
+          codesign --verify --deep --strict bin/FlashIt.app
+          codesign -dv --verbose=4 bin/FlashIt.app
+
+      - name: Notarize and staple
+        if: inputs.signing == 'developer-id'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          ditto -c -k --keepParent bin/FlashIt.app "$RUNNER_TEMP/flashit-notarize.zip"
+          xcrun notarytool submit "$RUNNER_TEMP/flashit-notarize.zip" \
+            --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+          xcrun stapler staple bin/FlashIt.app
+          spctl --assess --type execute --verbose=4 bin/FlashIt.app
+
+      # After stapling, so the ticket travels with the update.
+      - name: Updater archive
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          task darwin:updater:archive VERSION="$VERSION" ARCH="$ARCH"
+          tar -tzvf "bin/flashit-$VERSION-darwin-$ARCH.tar.gz" | head -5
+
+      - name: DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          LABEL: ${{ matrix.label }}
+          SIGNING: ${{ inputs.signing }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: |
+          dmg=bin/flashit-$VERSION-macos-$LABEL.dmg
+          mkdir -p "$RUNNER_TEMP/dmg"
+          cp -R bin/FlashIt.app "$RUNNER_TEMP/dmg/"
+          ln -s /Applications "$RUNNER_TEMP/dmg/Applications"
+          hdiutil create -volname FlashIt -srcfolder "$RUNNER_TEMP/dmg" -ov -format UDZO "$dmg"
+          if [ "$SIGNING" = developer-id ]; then
+            codesign --force --timestamp --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          fi
+
+      - name: Remove keychain
+        if: always() && inputs.signing == 'developer-id'
+        run: security delete-keychain "$RUNNER_TEMP/build.keychain" || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}
+          path: |
+            bin/flashit-*-macos-*.dmg
+            bin/flashit-*-darwin-*.tar.gz
+          if-no-files-found: error
+          retention-days: 14
