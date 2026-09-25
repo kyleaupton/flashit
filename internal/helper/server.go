@@ -36,6 +36,12 @@ type Options struct {
 	// authorized the user before the helper started (polkit, UAC) and no
 	// per-op check exists.
 	Authorizer Authorizer
+	// Images supplies write_image's source where it travels as a handle
+	// value rather than a passed descriptor (Windows).
+	Images ImageSource
+	// ExitOnReject ends Serve at the first connection Auth rejects, instead
+	// of dropping it and waiting for the real client.
+	ExitOnReject bool
 }
 
 type Server struct {
@@ -118,6 +124,9 @@ func (s *Server) Serve(ctx context.Context, ln net.Listener) error {
 			if err != nil {
 				s.opts.Logger.Warn("rejected connection", "error", err)
 				s.refuse(c, proto.NewError(proto.CodeUnauthorized, "caller is not authorized"))
+				if s.opts.ExitOnReject {
+					return err
+				}
 				continue
 			}
 			s.opts.Logger.Info("client connected", "uid", peer.UID)

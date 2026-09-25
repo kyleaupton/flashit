@@ -16,8 +16,11 @@ type FlashContext struct {
 	VolumeName  string                 // Volume name for the USB drive
 	PrivService priv.PrivilegedService // Privileged service for disk operations
 	// HelperMounts is set where the helper's format mounts the volume as
-	// root (Linux): only the helper can unmount and eject it then.
+	// root (Linux): only the helper can unmount it then.
 	HelperMounts bool
+	// HelperEjects is set where the helper ejects the stick (Linux,
+	// Windows), which reports a volume still in use as device_busy.
+	HelperEjects bool
 
 	// Pipeline state (set during execution)
 	Source         fs.FS  // ISO contents, read in process or through a mount (set by OpenSource)

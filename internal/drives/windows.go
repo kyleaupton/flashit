@@ -43,9 +43,13 @@ func (p *windowsProvider) ListRemovable(ctx context.Context) ([]Drive, error) {
 		defer cancel()
 	}
 
+	// The helper's gate is the real check; this keeps the list to what it
+	// accepts: USB, SD and MMC disks that neither boot nor hold Windows.
+	// BusType is matched as a name and as its STORAGE_BUS_TYPE number, in
+	// case it comes back as either.
 	script := `
 $result = @()
-Get-Disk | Where-Object {$_.BusType -eq "USB"} | ForEach-Object {
+Get-Disk | Where-Object { @("USB", "SD", "MMC", "7", "12", "13") -contains [string]$_.BusType -and -not $_.IsBoot -and -not $_.IsSystem } | ForEach-Object {
     $disk = $_
     $mountpoints = @()
     Get-Partition -DiskNumber $disk.Number -ErrorAction SilentlyContinue | ForEach-Object {
@@ -57,7 +61,7 @@ Get-Disk | Where-Object {$_.BusType -eq "USB"} | ForEach-Object {
         Model = $disk.Model
         SerialNumber = $disk.SerialNumber
         Size = $disk.Size
-        BusType = $disk.BusType
+        BusType = [string]$disk.BusType
         IsRemovable = $true
         Mountpoints = $mountpoints
     }
@@ -70,7 +74,7 @@ $result | ConvertTo-Json -Depth 3 -Compress
 		return nil, fmt.Errorf("ListRemovable: %w", err)
 	}
 
-	// Empty output means no USB disks
+	// Empty output means no removable disks
 	trimmed := strings.TrimSpace(string(out))
 	if trimmed == "" || trimmed == "null" {
 		return []Drive{}, nil

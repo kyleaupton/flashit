@@ -36,7 +36,7 @@ func TestFinalizeEjectsThroughHelper(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			svc := &privtest.Service{Ops: privtest.Ops{EjectErr: tc.err}}
-			state := &FlashContext{TargetDisk: "/dev/sdb", PrivService: svc, HelperMounts: true}
+			state := &FlashContext{TargetDisk: "/dev/sdb", PrivService: svc, HelperEjects: true}
 			var ev events
 			if err := (Finalize{}).Run(context.Background(), state, &ev); err != nil {
 				t.Fatalf("Finalize failed: %v", err)

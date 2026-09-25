@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"os"
 	"sync"
 	"syscall"
 
@@ -15,18 +16,9 @@ import (
 	"github.com/kyleaupton/flashit/internal/proto"
 )
 
-const (
-	// Removable is a 1 MiB removable whole disk with two partitions.
-	Removable = "/dev/sdb"
-	// RemovableLink is a symlink that Stat resolves to Removable.
-	RemovableLink = "/dev/disk/by-id/usb-Fake"
-	// Internal is a non-removable whole disk.
-	Internal = "/dev/sda"
-	// System is the whole disk backing "/".
-	System = "/dev/nvme0n1"
-	// RemovableSize is the size of Removable in bytes.
-	RemovableSize = 1 << 20
-)
+// RemovableSize is the size of Removable in bytes. The device paths are in
+// paths_*.go, since validate only accepts the host's own form.
+const RemovableSize = 1 << 20
 
 type FormatCall struct {
 	Device, FS, Label string
@@ -187,6 +179,43 @@ func (d *FakeDisk) Snapshot() []string {
 // like a host whose eject unmounts on its own (macOS).
 type NoMountTable struct {
 	helper.Disk
+}
+
+// UnmountFirst hides FakeDisk's MountTable methods but unmounts before
+// ejecting, like the Windows disk.
+type UnmountFirst struct {
+	helper.Disk
+}
+
+func (UnmountFirst) UnmountsBeforeEject() {}
+
+// FakeImages is an ImageSource that opens Files[handle] for reading, as the
+// Windows helper duplicates a handle. It records every request.
+type FakeImages struct {
+	mu     sync.Mutex
+	Files  map[uint64]string
+	Err    error
+	Asked  []uint64
+	Opened []*os.File
+}
+
+func (f *FakeImages) Image(handle uint64, size int64) (*os.File, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Asked = append(f.Asked, handle)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	path, ok := f.Files[handle]
+	if !ok {
+		return nil, fmt.Errorf("no handle %d in the parent", handle)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	f.Opened = append(f.Opened, file)
+	return file, nil
 }
 
 // FakeRaw records what was written to a device. Block, when set, makes every

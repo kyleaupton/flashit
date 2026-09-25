@@ -10,5 +10,5 @@ import (
 )
 
 func serve(context.Context, string, time.Duration, *slog.Logger) error {
-	return errors.New("this host has no native helper yet")
+	return errors.New("no standalone helper here; on Windows flashit.exe --privileged-helper is the helper")
 }

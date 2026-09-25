@@ -2,9 +2,6 @@ version: '3'
 
 includes:
   common: ../Taskfile.yml
-  helper:
-    taskfile: ../../helpers/windows/Taskfile.yml
-    dir: ../../helpers/windows
 
 vars:
   # Signing configuration - edit these values for your project
@@ -18,11 +15,6 @@ vars:
   CROSS_IMAGE: wails-cross
 
 tasks:
-  build:helper:
-    summary: Build the privileged helper
-    cmds:
-      - task: helper:build
-
   build:
     summary: Builds the application for Windows
     cmds:
@@ -100,8 +92,6 @@ tasks:
 
   package:
     summary: Packages the application
-    deps:
-      - task: build:helper
     cmds:
       - task: '{{if eq (.FORMAT | default "nsis") "msix"}}create:msix:package{{else}}create:nsis:installer{{end}}'
         vars:
@@ -130,15 +120,14 @@ tasks:
       - wails3 generate webview2bootstrapper -dir "{{.ROOT_DIR}}/build/windows/nsis"
       - |
         {{if eq OS "windows"}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" -DARG_HELPER_BINARY="{{.HELPER_BINARY}}" project.nsi
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}\{{.BIN_DIR}}\{{.APP_NAME}}.exe" project.nsi
         {{else}}
-        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" -DARG_HELPER_BINARY="{{.HELPER_BINARY}}" project.nsi
+        makensis {{if eq .INSTALL_SCOPE "user"}}-DWAILS_INSTALL_SCOPE=user -DREQUEST_EXECUTION_LEVEL=user {{end}}-DARG_WAILS_{{.ARG_FLAG}}_BINARY="{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" project.nsi
         {{end}}
     vars:
       ARCH: '{{.ARCH | default ARCH}}'
       ARG_FLAG: '{{if eq .ARCH "amd64"}}AMD64{{else}}ARM64{{end}}'
       INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "machine"}}'
-      HELPER_BINARY: '{{.HELPER_BINARY | default (printf "%s/bin/helpers/flashit-helper.exe" .ROOT_DIR)}}'
 
   create:msix:package:
     summary: Creates an MSIX package

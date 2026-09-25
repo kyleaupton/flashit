@@ -26,6 +26,10 @@ import (
 var assets embed.FS
 
 func main() {
+	if code, ok := runPrivilegedHelper(os.Args[1:]); ok {
+		os.Exit(code)
+	}
+
 	// Check for dry-run mode via environment variable
 	if os.Getenv("DRY_RUN") == "1" || os.Getenv("DRY_RUN") == "true" {
 		core.DryRun = true
@@ -37,6 +41,7 @@ func main() {
 		Name:        "FlashIt",
 		Description: "Create bootable USB OS installers",
 		LogLevel:    slog.LevelInfo,
+		Logger:      appLogger(),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
