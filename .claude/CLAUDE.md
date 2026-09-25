@@ -31,7 +31,12 @@ branches (`feature/...`, `chore/...`, `fix/...`) and merges to `main` by PR.
 WIM reading, splitting and LZX decompression are pure Go in `internal/wim`;
 there is no wimlib dependency. Windows ISOs are read in process through
 `golift.io/udf`, pinned at v0.1.0 and imported only by `internal/isofs`
-(decision 007). cgo is used only on macOS: the helper's
+(decision 007). FAT32 and the MBR on Windows come from
+`github.com/diskfs/go-diskfs`, imported only by `internal/fatfmt` and
+pinned at commit 36ef6236 (v1.9.4 writes a FAT two entries short at some
+sizes; decision 008). The Windows helper's pipe is
+`github.com/Microsoft/go-winio`; every other Win32 call goes through
+`golang.org/x/sys/windows`. cgo is used only on macOS: the helper's
 Authorization/DiskArbitration bindings in `internal/helper/*_darwin.{c,h}`
 and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 
@@ -39,6 +44,7 @@ and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 
 ```
 main.go, version.go          Wails app entry point, service registration
+host_windows.go              Windows: serve as the privileged helper when started with --privileged-helper (before Wails), log to %LOCALAPPDATA%\FlashIt\logs
 internal/core/               Shared contracts: Plan, Runnable, Event, Installer
 internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
 internal/jobs/               Job manager: enqueue (one job at a time), run, cancel
@@ -47,19 +53,19 @@ internal/sources/            Pure-Go image probe: ISO 9660 PVD and directory tre
 internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
-internal/iso/                ISO mounting per OS
+internal/iso/                ISO mounting, macOS only (Linux and Windows read in process)
 internal/isofs/              In-process UDF reader for Windows ISOs (fs.FS), the only golift importer; isocompare/ checks it against the host mount
 internal/wim/                WIM reader, splitter, lzx/ decompressor
+internal/fatfmt/             MBR plus one FAT32 partition over a whole disk through go-diskfs (Windows helper only), the only go-diskfs importer
 internal/fs/                 File copy from an fs.FS onto the target volume
-internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 4)
-internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, helpertest/ holds fakes
-internal/priv/               Privileged service clients: client.go (shared protocol client), transport_linux.go + service_linux.go (pkexec), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), keepalive.go (HoldDuring), privtest/ (fake service), windows/ (old helper)
+internal/proto/              Wire types shared by the app and the Go helper (NDJSON, protocol 5)
+internal/helper/             Helper server: validate/, ops, one-op-at-a-time; disk_linux.go + auth_linux.go are the Linux bindings, {disk,authz,authopen}_darwin.go + diskutil.go the macOS ones, {serve,disk,image,win32}_windows.go the Windows ones; helpertest/ holds fakes
+internal/priv/               Privileged service clients: client.go (shared protocol client), service_elevated.go (Linux and Windows: one prompt, Hold), transport_linux.go (pkexec), transport_windows.go (runas, named pipe), transport_darwin.go + service_darwin.go + authz_darwin.c (child helper, authopen), keepalive.go (HoldDuring), privtest/ (fake service)
 internal/eventbus/           Global emitter wired to app.Event.Emit
 internal/logger/             slog wrapper backed by the Wails logger
-cmd/flashit-helper/          Go helper entry point: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3)
+cmd/flashit-helper/          Go helper entry point for macOS and Linux: serve_linux.go (pkexec, one session) and serve_darwin.go (child of the app, serves fd 3); Windows has no separate helper binary
 cmd/wimtest/                 CLI for exercising the WIM splitter
 cmd/isotest/                 CLI comparing isofs with the host mount, per file size and SHA-256
-helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
 build/                       Per-platform Taskfiles and packaging config; build/linux holds nfpm.yaml, the polkit policy, the desktop file, icons and smoke-test.sh
 .github/workflows/           ci.yml; package-{macos,windows,linux}.yml; release.yml
@@ -76,7 +82,9 @@ task darwin:updater:archive VERSION=x.y.z   # bin/flashit-<ver>-darwin-<arch>.ta
 task linux:package        # on Linux, for the host arch: bin/flashit_<ver>_<arch>.deb and bin/flashit-<ver>-1.<rpmarch>.rpm; VERSION=1.2.3 overrides git describe
 sudo build/linux/smoke-test.sh bin/flashit_*.deb [ver]   # install, check layout and polkit action, purge; CI runs the same script (rpm in fedora:latest)
 gh workflow run package-linux.yml --ref <branch> [-f version=1.2.3]   # amd64 + arm64 packages, smoke-tested, as artifacts linux-amd64, linux-arm64, linux-sha256sums
-go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only)
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/fatfmt, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only); fatfmt runs fsck.fat (Linux) or fsck_msdos (macOS, 512-byte sectors) on every image when present
+FLASHIT_MTOOLS=1 go test -run Mtools ./internal/fatfmt              # Linux: write and read back a 5 GiB (sparse) tree with mtools
+FLASHIT_VHD_TEST=1 go test -v -run '^TestVHD$' ./internal/helper     # Windows, elevated: the disk ops on a VHDX it attaches (format + chkdsk, raw write, busy lock)
 go run ./cmd/isotest <iso>...   # isofs vs hdiutil (macOS) or mount -o loop,ro (Linux, root); exits non-zero on any difference. Run on every Windows ISO at hand before bumping golift.io/udf
 go test -run XXX -fuzz FuzzOpen -fuzztime 10m ./internal/isofs
 FLASHIT_ISO_CORPUS=<dir> go test -run Corpus ./internal/isofs          # isotest over every .iso in <dir>
@@ -89,6 +97,8 @@ cd frontend && npm run type-check
 
 `GOOS=linux go build ./...` fails on macOS because the Wails Linux backend
 needs cgo; cross-check with `GOOS=linux go build ./internal/... ./cmd/...`.
+`GOOS=windows go build ./... && GOOS=windows go vet ./...` works from any
+host (Wails needs no cgo on Windows).
 
 ## Status
 
@@ -98,7 +108,7 @@ Host OS support:
 | ------- | ------------- | --------- | ----------------- |
 | macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` spawned from the bundle as an unprivileged child, socketpair on fd 3; the raw device comes from `authopen` per flash |
 | Linux   | yes (`lsblk`) | not needed, read in process (`internal/isofs`) | `cmd/flashit-helper` spawned via `/usr/bin/pkexec`, unix socket |
-| Windows | yes (PowerShell) | yes | named-pipe helper |
+| Windows | yes (PowerShell: USB/SD/MMC, not boot or system) | not needed, read in process (`internal/isofs`) | `flashit.exe --privileged-helper` started through `runas` (one UAC prompt per job), random named pipe via go-winio |
 
 Linux ships as `.deb` and `.rpm` only (no AppImage, Flatpak or Snap: none
 can install a root-owned helper or a polkit policy), amd64 and arm64, on the
@@ -127,14 +137,16 @@ Installer support, derived from `Plan` guards:
 | Windows ISO| yes   | yes   | yes     |
 
 The Windows installer's first step, `OpenSource`, reads the ISO in process
-through `internal/isofs` on Linux (where `iso.IsMountSupported()` is false)
-and on macOS or Windows when `FLASHIT_ISO_READER=go`; otherwise it mounts
+through `internal/isofs` on Linux and Windows (where `iso.IsMountSupported()`
+is false) and on macOS when `FLASHIT_ISO_READER=go`; otherwise it mounts
 the ISO and reads it through `os.DirFS`. The rest of the pipeline sees an
 `fs.FS` either way. On Linux the helper's format mounts the volume as root
 under `/run/media/flashit/<label>`, so `FormatUSB.Cleanup` (on failure or
-cancel) and `Finalize` unmount and eject it through the helper
-(`FlashContext.HelperMounts`); macOS and Windows eject through `drives` as
-before.
+cancel) unmounts it through the helper (`FlashContext.HelperMounts`). On
+Linux and Windows `Finalize` ejects through the helper
+(`FlashContext.HelperEjects`), so a busy stick becomes a warning; macOS
+ejects through `drives`. On Windows the helper's format leaves the volume
+for Windows to mount and letter, and `drives.WaitForMount` finds it.
 
 ## Releases
 
@@ -192,12 +204,13 @@ and Wails delivers it to the frontend, where `frontend/src/stores/job.ts`
 subscribes with `Events.On('job:event', ...)`.
 
 Both installers wrap their pipeline in `priv.HoldDuring`, so the job's
-`Run`, cleanups included, holds the privileged session. On Linux the hold
-pings the helper every 20 s (a third of its 60 s idle timeout) so a long
-copy cannot let it exit before the eject; the hold ends when `Run` returns,
-whatever the outcome, and on `Shutdown`, and the helper idles out about 60 s
-later. A failed ping only stops the keepalive: it never respawns the helper
-or raises a second polkit prompt. macOS and Windows need no hold.
+`Run`, cleanups included, holds the privileged session. On Linux and
+Windows the hold pings the helper every 20 s (a third of its 60 s idle
+timeout) so a long copy cannot let it exit before the eject; the hold ends
+when `Run` returns, whatever the outcome, and on `Shutdown`, and the helper
+idles out about 60 s later. A failed ping only stops the keepalive: it
+never respawns the helper or raises a second polkit or UAC prompt. macOS
+needs no hold.
 
 ```go
 type Event struct {
@@ -267,7 +280,8 @@ rejects device paths outside `/dev` or containing `..`, partitions, non-block
 nodes, non-removable disks, any whole disk backing the running system,
 images larger than the device, and labels outside `^[A-Za-z0-9_ -]{1,11}$`.
 Only `fat32` formats. Validation runs before any prompt, so a refused
-request never costs the user a sheet.
+request never costs the user a sheet. The Windows rules sit in the same
+package (`validate/windows.go`, tested on every host).
 
 The helper never opens an image by path. The app opens the ISO itself and
 passes the open descriptor with the `write_image` line over the unix socket
@@ -303,6 +317,49 @@ only by `rmdir`. `eject` then syncs and, if `eject(1)` is installed,
 re-reads the partition table and runs it (without it the re-read is skipped,
 since it can make the desktop automount the stick again); once the unmount
 worked, a failure there is only logged.
+
+Windows: the helper is `flashit.exe` itself, started by the app through
+`ShellExecuteEx` `runas` with `--privileged-helper -pipe \\.\pipe\flashit-<32
+hex> -parent-pid <app pid> -log-handle <h>`, before Wails is created
+(`host_windows.go`, `internal/helper/serve_windows.go`). It refuses to
+start unless the given PID is its parent as the kernel recorded it
+(`NtQueryInformationProcess`) and that process started before it; it
+keeps a handle to the parent, so the PID cannot be reused, and exits when
+the parent does. It creates the pipe with go-winio as the first instance
+(`FILE_CREATE`: an existing name fails) with `FILE_PIPE_REJECT_REMOTE_CLIENTS`
+and an SDDL granting the app's token user (read from the parent's token)
+read, write and read-attributes only, its own user `GA` to create the
+instances Accept serves on (the same SID unless elevation was over the
+shoulder), and a medium mandatory label so the unelevated app can write.
+On connect `GetNamedPipeClientProcessId` must be the parent; any other
+client ends the helper (`Options.ExitOnReject`). One client, then it exits
+when that client leaves. The app, before sending anything, requires
+`GetNamedPipeServerProcessId` to be the process `ShellExecuteEx` returned,
+so a pipe someone created first is refused. The image never travels by
+path: `write_image` carries the app's handle value, and the helper
+duplicates it with read access only through a `PROCESS_DUP_HANDLE`-only
+handle to the parent, then requires `FILE_TYPE_DISK`, no directory or
+device attribute, an NT path below a device (not a raw volume), and the
+claimed size, and reads by position. Its log is a handle duplicated the
+same way (`%LOCALAPPDATA%\FlashIt\logs\helper.log`, the app's own log is
+`flashit.log` there), never a path it opens as admin. The target must be
+exactly `\\.\PhysicalDriveN`, on a USB, SD or MMC bus
+(`IOCTL_STORAGE_QUERY_PROPERTY`; virtual and VHD disks are refused), not a
+disk holding the `%SystemRoot%` volume, the `HKLM\SYSTEM\Setup
+SystemPartition` volume (the ESP or boot partition), or a page file's
+volume (`ExistingPageFiles`, `PagingFiles`), resolved through
+`IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS`; anything it cannot resolve refuses
+every op. Before writing, formatting, unmounting or ejecting it locks
+(`FSCTL_LOCK_VOLUME`, five tries a second apart, then `device_busy`) and
+dismounts every volume with an extent on the disk and holds the locks until
+the op ends; writes also delete the drive layout, re-check the disk number
+and bus on the write handle, go in aligned whole sectors, and end with a
+flush and `IOCTL_DISK_UPDATE_PROPERTIES`. Format is `internal/fatfmt` on
+the disk handle (MBR, one active 0x0C partition from 1 MiB, FAT32 with
+go-diskfs's cluster sizes; disks above 2 TiB and sectors other than 512 or
+4096 refused). Eject is `IOCTL_STORAGE_EJECT_MEDIA` after the lock; once
+the unmount worked, its failure is only logged. The helper runs no shell
+commands. The UAC prompt is unsigned ("Unknown publisher").
 
 macOS: nothing runs as root and there is no daemon, socket file or peer
 check; the helper is the app's own child on an inherited socketpair, so the
