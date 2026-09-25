@@ -90,5 +90,35 @@ view of the sheet is in `log stream --predicate 'process == "authd"'`.
 ## Release builds
 
 `task darwin:package` builds `bin/FlashIt.app` signed with
-`APPLE_SIGNING_IDENTITY` when set and ad hoc otherwise; `APPLE_TEAM_ID` is
-needed for the Info.plist. The release workflow then notarizes the bundle.
+`APPLE_SIGNING_IDENTITY` when set and ad hoc otherwise, and
+`task darwin:updater:archive VERSION=x.y.z` packs it for the updater. The
+release workflow notarizes and staples the bundle before packing it.
+
+## Testing the updater locally
+
+`build/updater/harness.sh` builds 0.0.1 and 0.0.2 with the `updatertest`
+tag, which embeds a throwaway key from `bin/updatertest/key/` (made fresh by
+every build) and reads the manifest from `FLASHIT_UPDATE_URL`, default
+`http://127.0.0.1:8765/manifest.json`. The real key is never involved.
+
+```bash
+build/updater/harness.sh build-macos          # ad hoc 0.0.1 and 0.0.2, ~2 min
+build/updater/harness.sh serve                # terminal 1: signs and serves 0.0.2
+build/updater/harness.sh run-macos            # terminal 2: a fresh copy of 0.0.1
+tail -f "$TMPDIR/flashit-updatertest.log"     # every state, across the relaunch
+```
+
+About 10 s after launch the pill reads "FlashIt 0.0.2 is ready — Restart
+to update"; the menu's FlashIt › Check for Updates… checks at once. Restart
+swaps `bin/updatertest/app/FlashIt.app` and relaunches 0.0.2, which then
+reports up to date. The swap log is `$TMPDIR/wails-update-<pid>.log`.
+`run-macos --auto-restart` restarts as soon as the update is ready.
+
+`serve tampered` flips one byte of the archive after signing and
+`serve wrong-key` signs with another key; either way 0.0.1 logs an error
+and keeps running. `DRY_RUN=1 build/updater/harness.sh run-macos` swaps in
+mock drives, so a simulated flash shows Restart disabled while it runs.
+
+On Ubuntu, `harness.sh build-linux`, `serve`, then `run-linux` installs the
+0.0.1 deb (sudo) and starts it; the pill offers "View release", and the
+server log shows only the manifest being fetched.

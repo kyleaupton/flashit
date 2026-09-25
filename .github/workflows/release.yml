@@ -1,39 +1,107 @@
 name: Release
 
+# Tag vX.Y.Z to release. The package workflows build and test each platform;
+# this one signs the update manifest and publishes.
+#
+# Run by hand it is a dry run: everything but the publish, with the manifest
+# signed by a key made for the run instead of UPDATER_PRIVATE_KEY.
+
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to build, without the v
+        type: string
+        required: true
+      signing:
+        description: macOS signing for the dry run
+        type: choice
+        options: [adhoc, developer-id]
+        default: adhoc
 
-permissions:
-  contents: write
-
-env:
-  GO_VERSION: '1.26'
-  NODE_VERSION: '22'
+permissions: {}
 
 jobs:
   version:
-    runs-on: ubuntu-latest
+    name: Version
+    runs-on: ubuntu-24.04
     outputs:
-      version: ${{ steps.version.outputs.VERSION }}
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+      signing: ${{ steps.version.outputs.signing }}
     steps:
-      - name: Get version from tag
+      - name: Resolve version
         id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+        env:
+          EVENT: ${{ github.event_name }}
+          TAG: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_SIGNING: ${{ inputs.signing }}
+        run: |
+          if [ "$EVENT" = push ]; then
+            version=${TAG#v}
+            signing=developer-id
+          else
+            version=$INPUT_VERSION
+            signing=$INPUT_SIGNING
+          fi
+          if ! printf '%s\n' "$version" | grep -Eqx '[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?'; then
+            echo "::error::version '$version' is not MAJOR.MINOR.PATCH[-PRERELEASE]"
+            exit 1
+          fi
+          # A prerelease never becomes releases/latest, so installed apps
+          # never see its manifest.
+          case "$version" in *-*) prerelease=true ;; *) prerelease=false ;; esac
+          {
+            echo "version=$version"
+            echo "prerelease=$prerelease"
+            echo "signing=$signing"
+          } >> "$GITHUB_OUTPUT"
+
+  package-macos:
+    needs: version
+    uses: ./.github/workflows/package-macos.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.version.outputs.version }}
+      signing: ${{ needs.version.outputs.signing }}
+    secrets:
+      MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+      MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+      APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+
+  package-windows:
+    needs: version
+    uses: ./.github/workflows/package-windows.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.version.outputs.version }}
 
   package-linux:
     needs: version
     uses: ./.github/workflows/package-linux.yml
+    permissions:
+      contents: read
     with:
       version: ${{ needs.version.outputs.version }}
 
-  build-macos:
-    runs-on: macos-latest
-    strategy:
-      matrix:
-        arch: [arm64, amd64]
-
+  # The only job that sees UPDATER_PRIVATE_KEY.
+  manifest:
+    name: Update manifest
+    needs: [version, package-macos, package-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -41,339 +109,137 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          go-version-file: go.mod
 
       - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
+        run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
 
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Import Code Signing Certificate
-        env:
-          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
-          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
-        run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-
-          # Decode certificate
-          echo "$MACOS_CERTIFICATE" | base64 --decode > $RUNNER_TEMP/certificate.p12
-
-          # Create and configure keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          # Import certificate
-          security import $RUNNER_TEMP/certificate.p12 -k $KEYCHAIN_PATH \
-            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign -T /usr/bin/security
-
-          # Set key partition list
-          security set-key-partition-list -S apple-tool:,apple:,codesign: \
-            -s -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
-
-          # Add to keychain search list
-          security list-keychains -d user -s $KEYCHAIN_PATH login.keychain
-
-          # Clean up certificate file
-          rm $RUNNER_TEMP/certificate.p12
-
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-
-      - name: Build application
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          GOARCH: ${{ matrix.arch }}
-        run: |
-          task darwin:package VERSION=${{ steps.version.outputs.VERSION }} ARCH=${{ matrix.arch }}
-
-      - name: Verify code signature
-        run: |
-          codesign --verify --deep --strict bin/FlashIt.app
-          codesign -dv --verbose=4 bin/FlashIt.app
-
-      - name: Notarize application
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          # Create zip for notarization
-          ditto -c -k --keepParent bin/FlashIt.app $RUNNER_TEMP/flashit-notarize.zip
-
-          # Submit for notarization and wait
-          xcrun notarytool submit $RUNNER_TEMP/flashit-notarize.zip \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
-
-          # Staple the notarization ticket
-          xcrun stapler staple bin/FlashIt.app
-
-      - name: Verify notarization
-        run: |
-          spctl --assess --type execute --verbose=4 bin/FlashIt.app
-
-      - name: Set arch label
-        id: arch_label
-        run: |
-          if [ "${{ matrix.arch }}" = "arm64" ]; then
-            echo "LABEL=apple-silicon" >> $GITHUB_OUTPUT
-          else
-            echo "LABEL=intel" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Create DMG
-        run: |
-          # Create DMG for distribution
-          mkdir -p $RUNNER_TEMP/dmg-contents
-          cp -R bin/FlashIt.app $RUNNER_TEMP/dmg-contents/
-          ln -s /Applications $RUNNER_TEMP/dmg-contents/Applications
-
-          hdiutil create -volname "FlashIt" \
-            -srcfolder $RUNNER_TEMP/dmg-contents \
-            -ov -format UDZO \
-            bin/flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.dmg
-
-          # Sign the DMG
-          codesign --force --sign "${{ secrets.APPLE_SIGNING_IDENTITY }}" \
-            bin/flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.dmg
-
-      - name: Create tar.gz for updater
-        run: |
-          cd bin
-          tar -czvf flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.tar.gz flashit.app
-
-      - name: Calculate checksums
-        id: checksums
-        run: |
-          cd bin
-          DMG_SHA256=$(shasum -a 256 flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.dmg | cut -d ' ' -f 1)
-          TAR_SHA256=$(shasum -a 256 flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.tar.gz | cut -d ' ' -f 1)
-          TAR_SIZE=$(stat -f%z flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.tar.gz)
-
-          echo "dmg_sha256=$DMG_SHA256" >> $GITHUB_OUTPUT
-          echo "tar_sha256=$TAR_SHA256" >> $GITHUB_OUTPUT
-          echo "tar_size=$TAR_SIZE" >> $GITHUB_OUTPUT
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: macos-${{ matrix.arch }}
-          path: |
-            bin/flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.dmg
-            bin/flashit-${{ steps.version.outputs.VERSION }}-macos-${{ steps.arch_label.outputs.LABEL }}.tar.gz
-          retention-days: 1
-
-      - name: Save checksums
-        run: |
-          mkdir -p checksums
-          echo "${{ steps.checksums.outputs.dmg_sha256 }}" > checksums/dmg-${{ matrix.arch }}.sha256
-          echo "${{ steps.checksums.outputs.tar_sha256 }}" > checksums/tar-${{ matrix.arch }}.sha256
-          echo "${{ steps.checksums.outputs.tar_size }}" > checksums/tar-${{ matrix.arch }}.size
-
-      - name: Upload checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksums-${{ matrix.arch }}
-          path: checksums/
-          retention-days: 1
-
-  build-windows:
-    runs-on: windows-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Setup Go
-        uses: actions/setup-go@v6
-        with:
-          go-version: ${{ env.GO_VERSION }}
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
-      - name: Install Task
-        uses: arduino/setup-task@v2
-        with:
-          version: 3.x
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Install Wails CLI
-        run: go install github.com/wailsapp/wails/v3/cmd/wails3@latest
-
-      - name: Install NSIS
-        run: choco install nsis -y
-
-      - name: Get version from tag
-        id: version
-        shell: pwsh
-        run: |
-          $version = $env:GITHUB_REF_NAME -replace '^v',''
-          echo "VERSION=$version" >> $env:GITHUB_OUTPUT
-
-      - name: Install frontend dependencies
-        run: npm ci
-        working-directory: frontend
-
-      - name: Exclude node_modules from Go
-        run: echo "module node_modules" > frontend/node_modules/go.mod
-
-      - name: Build helper
-        run: task windows:build:helper
-
-      - name: Build application
-        run: task windows:build VERSION=${{ steps.version.outputs.VERSION }}
-
-      - name: Create NSIS installer
-        shell: pwsh
-        run: |
-          wails3 generate webview2bootstrapper -dir build/windows/nsis
-          $helperPath = "${{ github.workspace }}\bin\helpers\flashit-helper.exe"
-          $appPath = "${{ github.workspace }}\bin\FlashIt.exe"
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -DARG_WAILS_AMD64_BINARY="$appPath" -DARG_HELPER_BINARY="$helperPath" build\windows\nsis\project.nsi
-
-      - name: Rename installer
-        shell: pwsh
-        run: |
-          Move-Item -Path bin\flashit-amd64-installer.exe -Destination bin\flashit-${{ steps.version.outputs.VERSION }}-windows-x64-installer.exe
-
-      - name: Create zip for updater
-        shell: pwsh
-        run: |
-          Compress-Archive -Path bin\FlashIt.exe,bin\helpers\flashit-helper.exe -DestinationPath bin\flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip
-
-      - name: Calculate checksums
-        id: checksums
-        shell: pwsh
-        run: |
-          $installerHash = (Get-FileHash -Path bin\flashit-${{ steps.version.outputs.VERSION }}-windows-x64-installer.exe -Algorithm SHA256).Hash.ToLower()
-          $zipHash = (Get-FileHash -Path bin\flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip -Algorithm SHA256).Hash.ToLower()
-          $zipSize = (Get-Item bin\flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip).Length
-
-          echo "installer_sha256=$installerHash" >> $env:GITHUB_OUTPUT
-          echo "zip_sha256=$zipHash" >> $env:GITHUB_OUTPUT
-          echo "zip_size=$zipSize" >> $env:GITHUB_OUTPUT
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: windows-x64
-          path: |
-            bin/flashit-${{ steps.version.outputs.VERSION }}-windows-x64-installer.exe
-            bin/flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip
-          retention-days: 1
-
-      - name: Save checksums
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force -Path checksums
-          Set-Content -Path checksums/installer-amd64.sha256 -Value "${{ steps.checksums.outputs.installer_sha256 }}"
-          Set-Content -Path checksums/zip-amd64.sha256 -Value "${{ steps.checksums.outputs.zip_sha256 }}"
-          Set-Content -Path checksums/zip-amd64.size -Value "${{ steps.checksums.outputs.zip_size }}"
-
-      - name: Upload checksums
-        uses: actions/upload-artifact@v4
-        with:
-          name: checksums-windows-x64
-          path: checksums/
-          retention-days: 1
-
-  create-release:
-    needs: [build-macos, build-windows, package-linux]
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Get version from tag
-        id: version
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
-
-      - name: Download all artifacts
+      - name: Download macOS packages
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          pattern: macos-*
+          merge-multiple: true
+          path: packages
 
-      - name: Generate update.json
+      - name: Download Linux packages
+        uses: actions/download-artifact@v4
+        with:
+          pattern: linux-*
+          merge-multiple: true
+          path: packages
+
+      # Only the macOS updater archives and one deb per Linux arch; the Linux
+      # entries exist so the endpoint provider finds one for the platform.
+      - name: Collect updater artifacts
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-          RELEASE_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          mkdir updater
+          for f in \
+            "flashit-$VERSION-darwin-arm64.tar.gz" \
+            "flashit-$VERSION-darwin-amd64.tar.gz" \
+            "flashit_${VERSION}_amd64.deb" \
+            "flashit_${VERSION}_arm64.deb"; do
+            cp "packages/$f" updater/
+          done
+          ls -l updater
 
-          # Read macOS checksums and sizes
-          ARM64_TAR_SHA256=$(cat artifacts/checksums-arm64/tar-arm64.sha256)
-          ARM64_TAR_SIZE=$(cat artifacts/checksums-arm64/tar-arm64.size)
-          AMD64_TAR_SHA256=$(cat artifacts/checksums-amd64/tar-amd64.sha256)
-          AMD64_TAR_SIZE=$(cat artifacts/checksums-amd64/tar-amd64.size)
+      - name: Write signing key
+        env:
+          EVENT: ${{ github.event_name }}
+          UPDATER_PRIVATE_KEY: ${{ secrets.UPDATER_PRIVATE_KEY }}
+        run: |
+          umask 077
+          key=$RUNNER_TEMP/updater.key
+          if [ "$EVENT" = push ]; then
+            if [ -z "$UPDATER_PRIVATE_KEY" ]; then
+              echo "::error::the UPDATER_PRIVATE_KEY secret is not set"
+              exit 1
+            fi
+            printf '%s\n' "$UPDATER_PRIVATE_KEY" > "$key"
+            cp build/updater/updater.key.pub "$RUNNER_TEMP/updater.key.pub"
+          else
+            # A dry run never signs a non-release build with the real key.
+            wails3 updater genkey -out "$key" -force > /dev/null
+          fi
+          chmod 600 "$key"
 
-          # Read Windows checksums and sizes
-          WINDOWS_ZIP_SHA256=$(cat artifacts/checksums-windows-x64/zip-amd64.sha256)
-          WINDOWS_ZIP_SIZE=$(cat artifacts/checksums-windows-x64/zip-amd64.size)
+      - name: Sign manifest
+        run: |
+          wails3 updater manifest \
+            -version "$VERSION" \
+            -key "$RUNNER_TEMP/updater.key" \
+            -url-prefix "https://github.com/kyleaupton/flashit/releases/download/v$VERSION" \
+            -notes "See https://github.com/kyleaupton/flashit/releases/tag/v$VERSION" \
+            -output updater/manifest.json \
+            updater/
 
-          cat > artifacts/update.json << EOF
-          {
-            "version": "${VERSION}",
-            "release_date": "${RELEASE_DATE}",
-            "release_notes": "See release notes at https://github.com/kyleaupton/flashit/releases/tag/v${VERSION}",
-            "platforms": {
-              "darwin-arm64": {
-                "url": "https://github.com/kyleaupton/flashit/releases/download/v${VERSION}/flashit-${VERSION}-macos-apple-silicon.tar.gz",
-                "size": ${ARM64_TAR_SIZE},
-                "checksum": "sha256:${ARM64_TAR_SHA256}"
-              },
-              "darwin-amd64": {
-                "url": "https://github.com/kyleaupton/flashit/releases/download/v${VERSION}/flashit-${VERSION}-macos-intel.tar.gz",
-                "size": ${AMD64_TAR_SIZE},
-                "checksum": "sha256:${AMD64_TAR_SHA256}"
-              },
-              "windows-amd64": {
-                "url": "https://github.com/kyleaupton/flashit/releases/download/v${VERSION}/flashit-${VERSION}-windows-x64.zip",
-                "size": ${WINDOWS_ZIP_SIZE},
-                "checksum": "sha256:${WINDOWS_ZIP_SHA256}"
-              }
-            }
-          }
-          EOF
+      - name: Delete signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/updater.key"
 
-          cat artifacts/update.json
+      - name: Verify manifest
+        run: wails3 updater verify -manifest updater/manifest.json -publickey "$RUNNER_TEMP/updater.key.pub"
 
-      - name: Create Release
+      - name: Check manifest entries
+        run: |
+          jq . updater/manifest.json
+          got=$(jq -r '.artifacts[] | "\(.platform)/\(.arch)"' updater/manifest.json | sort | paste -sd ' ' -)
+          want="darwin/amd64 darwin/arm64 linux/amd64 linux/arm64"
+          if [ "$got" != "$want" ]; then
+            echo "::error::manifest entries are '$got', want '$want'"
+            exit 1
+          fi
+          if [ "$(jq -r .version updater/manifest.json)" != "$VERSION" ]; then
+            echo "::error::manifest version does not match $VERSION"
+            exit 1
+          fi
+          # An entry without a platform or arch matches every platform.
+          if jq -e '.artifacts[] | select((.platform // "") == "" or (.arch // "") == "")' updater/manifest.json > /dev/null; then
+            echo "::error::manifest has an entry that matches every platform"
+            exit 1
+          fi
+          if jq -e '.artifacts[] | select(.signatureAlgo != "ed25519ph" or (.signature // "") == "")' updater/manifest.json > /dev/null; then
+            echo "::error::manifest has an unsigned entry"
+            exit 1
+          fi
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: manifest
+          path: updater/manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  publish:
+    name: Publish
+    if: github.event_name == 'push'
+    needs: [version, manifest, package-macos, package-windows, package-linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+          path: dist
+
+      # One SHA256SUMS for everything, in place of package-linux's own.
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: |
+          rm -f SHA256SUMS
+          ls -l
+          sha256sum -- * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          name: v${{ steps.version.outputs.VERSION }}
-          draft: false
-          prerelease: false
+          name: v${{ env.VERSION }}
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}
           generate_release_notes: true
-          files: |
-            artifacts/macos-arm64/flashit-${{ steps.version.outputs.VERSION }}-macos-apple-silicon.dmg
-            artifacts/macos-arm64/flashit-${{ steps.version.outputs.VERSION }}-macos-apple-silicon.tar.gz
-            artifacts/macos-amd64/flashit-${{ steps.version.outputs.VERSION }}-macos-intel.dmg
-            artifacts/macos-amd64/flashit-${{ steps.version.outputs.VERSION }}-macos-intel.tar.gz
-            artifacts/windows-x64/flashit-${{ steps.version.outputs.VERSION }}-windows-x64-installer.exe
-            artifacts/windows-x64/flashit-${{ steps.version.outputs.VERSION }}-windows-x64.zip
-            artifacts/linux-amd64/flashit*
-            artifacts/linux-arm64/flashit*
-            artifacts/linux-sha256sums/SHA256SUMS
-            artifacts/update.json
+          fail_on_unmatched_files: true
+          files: dist/*

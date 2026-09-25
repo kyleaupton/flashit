@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useColorMode } from '@vueuse/core'
-import { useDrivesStore, useSourceStore, useJobStore, useAppStore } from '@/stores'
+import { useDrivesStore, useSourceStore, useJobStore, useAppStore, useUpdateStore } from '@/stores'
 import { Button } from '@/components/ui/button'
 import SourceDropzone from '@/components/SourceDropzone.vue'
 import DriveSelector from '@/components/DriveSelector.vue'
 import ProgressPanel from '@/components/ProgressPanel.vue'
 import StatusAlert from '@/components/StatusAlert.vue'
 import FlashButton from '@/components/FlashButton.vue'
+import UpdateBanner from '@/components/UpdateBanner.vue'
 import { Toaster } from '@/components/ui/sonner'
 import { OpenPrivacySettings } from '@flashit/service/privservice'
 import { toast } from 'vue-sonner'
@@ -17,6 +18,7 @@ const drivesStore = useDrivesStore()
 const sourceStore = useSourceStore()
 const jobStore = useJobStore()
 const appStore = useAppStore()
+const updateStore = useUpdateStore()
 
 async function handleStartJob() {
   if (!sourceStore.source || !drivesStore.selectedDrive) return
@@ -46,6 +48,7 @@ onMounted(() => {
   drivesStore.startAutoRefresh()
   sourceStore.subscribeToDrops()
   jobStore.subscribeToEvents()
+  void updateStore.init()
 })
 </script>
 
@@ -54,6 +57,10 @@ onMounted(() => {
     <header class="app-header p-4 text-center">
       <h1 class="text-xl font-semibold m-0">FlashIt</h1>
     </header>
+
+    <div class="px-4 pb-3 empty:hidden">
+      <UpdateBanner />
+    </div>
 
     <Toaster position="bottom-center" />
 

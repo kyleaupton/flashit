@@ -143,7 +143,7 @@ tasks:
       - rm -f {{.BIN_DIR}}/{{.STALE}}
       - go run github.com/goreleaser/nfpm/v2/cmd/nfpm@{{.NFPM_VERSION}} package --config build/linux/nfpm/nfpm.yaml --packager {{.PACKAGER}} --target {{.BIN_DIR}}/
     vars:
-      # The nfpm Wails beta.23 is built against; `wails3 tool package` cannot
+      # The nfpm Wails beta.25 is built against; `wails3 tool package` cannot
       # give the conventional file names.
       NFPM_VERSION: v2.44.1
     env:

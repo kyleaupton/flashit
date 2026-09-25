@@ -155,14 +155,8 @@ tasks:
 
   generate:info:plist:
     summary: Generates Info.plist from template with version substitution
-    preconditions:
-      - sh: '[ -n "$APPLE_TEAM_ID" ]'
-        msg: "APPLE_TEAM_ID environment variable must be set"
     cmds:
-      - |
-        sed -e 's/${APPLE_TEAM_ID}/'"$APPLE_TEAM_ID"'/g' \
-            -e 's/${VERSION}/{{.VERSION | default "0.1.0"}}/g' \
-            build/darwin/Info.plist.template > build/darwin/Info.plist
+      - sed -e 's/${VERSION}/{{.VERSION | default "0.1.0"}}/g' build/darwin/Info.plist.template > build/darwin/Info.plist
 
   create:app:bundle:
     summary: Creates an `.app` bundle
@@ -176,12 +170,27 @@ tasks:
       # Sign in order: helper, then main binary, then bundle, all with the
       # same identity and the hardened runtime. The helper needs no
       # entitlements; the app keeps its own. Ad hoc when no identity is set.
-      - codesign --force --options runtime --identifier {{.HELPER_ID}} --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/flashit-helper"
-      - codesign --force --options runtime --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
-      - codesign --force --options runtime --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}"
+      - codesign --force --options runtime {{.TIMESTAMP}} --identifier {{.HELPER_ID}} --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/flashit-helper"
+      - codesign --force --options runtime {{.TIMESTAMP}} --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}/Contents/MacOS/{{.APP_NAME}}"
+      - codesign --force --options runtime {{.TIMESTAMP}} --entitlements build/darwin/entitlements.plist --sign "{{.SIGNING_IDENTITY}}" "{{.APP}}"
     vars:
       APP: '{{.BIN_DIR}}/{{.APP_NAME}}.app'
       SIGNING_IDENTITY: '{{.APPLE_SIGNING_IDENTITY | default "-"}}'
+      # Notarization wants a secure timestamp; an ad hoc signature has none.
+      TIMESTAMP: '{{if eq .SIGNING_IDENTITY "-"}}--timestamp=none{{else}}--timestamp{{end}}'
+
+  updater:archive:
+    summary: Packs bin/FlashIt.app into the updater archive bin/flashit-<ver>-darwin-<arch>.tar.gz
+    # The Wails updater unpacks .tar.gz and .zip; the archive must hold the
+    # bundle and nothing else, so no AppleDouble ._ files either.
+    requires:
+      vars: [VERSION]
+    cmds:
+      - rm -f "{{.BIN_DIR}}"/flashit-*-darwin-*.tar.gz
+      - COPYFILE_DISABLE=1 tar --no-mac-metadata -czf "{{.ARCHIVE}}" -C "{{.BIN_DIR}}" "{{.APP_NAME}}.app"
+      - test "$(tar -tzf "{{.ARCHIVE}}" | cut -d/ -f1 | sort -u)" = "{{.APP_NAME}}.app"
+    vars:
+      ARCHIVE: '{{.BIN_DIR}}/flashit-{{.VERSION}}-darwin-{{.ARCH | default ARCH}}.tar.gz'
 
   assemble:bundle:
     summary: Lays out a bundle from bin/ (app, helper, icons)

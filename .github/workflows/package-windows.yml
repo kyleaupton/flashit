@@ -1,4 +1,4 @@
-name: Package Linux
+name: Package Windows
 
 on:
   workflow_dispatch:
@@ -22,23 +22,16 @@ env:
 
 jobs:
   package:
-    name: Package (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
+    name: Package (x64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # The version lands in -ldflags and package metadata, so only a plain
-      # semver gets through.
       - name: Resolve version
         id: version
         env:
@@ -50,12 +43,6 @@ jobs:
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
-
-      - name: Install build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -78,65 +65,52 @@ jobs:
       - name: Install Wails CLI
         run: go install "github.com/wailsapp/wails/v3/cmd/wails3@$(go list -m -f '{{.Version}}' github.com/wailsapp/wails/v3)"
 
+      - name: Install NSIS
+        run: choco install nsis -y
+
       - name: Install frontend dependencies
         run: npm ci
         working-directory: frontend
 
-      - name: Build packages
+      - name: Exclude node_modules from Go
+        run: echo "module node_modules" > frontend/node_modules/go.mod
+
+      - name: Build helper
+        run: task windows:build:helper
+
+      - name: Build application
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          task linux:package VERSION="$VERSION"
-          ls -l bin/flashit_*.deb bin/flashit-*.rpm
+        run: task windows:build VERSION="$VERSION"
 
+      # No updater on Windows yet, but the binary carries the key all the same.
       - name: Check the updater key
-        run: build/updater/check-release-binary.sh bin/FlashIt
+        run: build/updater/check-release-binary.sh bin/FlashIt.exe
 
-      - name: Smoke-test the deb
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: sudo build/linux/smoke-test.sh bin/flashit_*.deb "$VERSION"
-
-      - name: Smoke-test the rpm on Fedora
+      - name: NSIS installer
+        shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
-          docker run --rm -v "$PWD:/src:ro" -w /src fedora:latest \
-            build/linux/smoke-test.sh bin/flashit-*.rpm "$VERSION"
+          wails3 generate webview2bootstrapper -dir build/windows/nsis
+          $helperPath = "$env:GITHUB_WORKSPACE\bin\helpers\flashit-helper.exe"
+          $appPath = "$env:GITHUB_WORKSPACE\bin\FlashIt.exe"
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -DARG_WAILS_AMD64_BINARY="$appPath" -DARG_HELPER_BINARY="$helperPath" build\windows\nsis\project.nsi
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Move-Item -Path bin\flashit-amd64-installer.exe -Destination "bin\flashit-$env:VERSION-windows-x64-installer.exe"
 
-      - name: Upload packages
+      - name: Zip
+        shell: pwsh
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: Compress-Archive -Path bin\FlashIt.exe,bin\helpers\flashit-helper.exe -DestinationPath "bin\flashit-$env:VERSION-windows-x64.zip"
+
+      - name: Upload
         uses: actions/upload-artifact@v4
         with:
-          name: linux-${{ matrix.arch }}
+          name: windows-x64
           path: |
-            bin/flashit_*.deb
-            bin/flashit-*.rpm
-          if-no-files-found: error
-          retention-days: 14
-
-  checksums:
-    name: Checksums
-    needs: package
-    runs-on: ubuntu-24.04
-
-    steps:
-      - name: Download packages
-        uses: actions/download-artifact@v4
-        with:
-          pattern: linux-*
-          merge-multiple: true
-          path: packages
-
-      - name: Write SHA256SUMS
-        working-directory: packages
-        run: |
-          sha256sum flashit_*.deb flashit-*.rpm > SHA256SUMS
-          cat SHA256SUMS
-
-      - name: Upload SHA256SUMS
-        uses: actions/upload-artifact@v4
-        with:
-          name: linux-sha256sums
-          path: packages/SHA256SUMS
+            bin/flashit-*-windows-x64-installer.exe
+            bin/flashit-*-windows-x64.zip
           if-no-files-found: error
           retention-days: 14

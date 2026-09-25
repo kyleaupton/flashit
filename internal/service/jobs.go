@@ -57,8 +57,8 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	// Checked before Plan, whose EnsureReady pings the helper: mid-op the
 	// helper answers busy and the client would retire the running job's
 	// session. Enqueue checks again under its own lock.
-	if s.mgr.Active() {
-		return StartJobResponse{}, jobs.ErrJobActive
+	if err := s.mgr.Busy(); err != nil {
+		return StartJobResponse{}, err
 	}
 	if req.SourcePath == "" {
 		return StartJobResponse{}, errors.New("source path is required")
@@ -116,6 +116,24 @@ func findRemovable(ctx context.Context, device string) (drives.Drive, error) {
 		}
 	}
 	return drives.Drive{}, fmt.Errorf("%s is not a removable drive", device)
+}
+
+// JobGate is what the updater holds across a restart. It is a separate type
+// so the frontend bindings, which cover every JobsService method, leave it
+// out.
+type JobGate struct{ s *JobsService }
+
+func NewJobGate(s *JobsService) JobGate { return JobGate{s: s} }
+
+// BlockJobs refuses new jobs until release is called, and fails while a
+// job is pending, running or still being planned.
+func (g JobGate) BlockJobs() (release func(), err error) {
+	// A StartJob in flight may be planning a job Enqueue has not seen yet.
+	if !g.s.start.TryLock() {
+		return nil, jobs.ErrJobActive
+	}
+	defer g.s.start.Unlock()
+	return g.s.mgr.Block()
 }
 
 // CancelJob cancels a running job by ID.
