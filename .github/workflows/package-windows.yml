@@ -75,9 +75,6 @@ jobs:
       - name: Exclude node_modules from Go
         run: echo "module node_modules" > frontend/node_modules/go.mod
 
-      - name: Build helper
-        run: task windows:build:helper
-
       - name: Build application
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -89,9 +86,8 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           wails3 generate webview2bootstrapper -dir build/windows/nsis
-          $helperPath = "$env:GITHUB_WORKSPACE\bin\helpers\flashit-helper.exe"
           $appPath = "$env:GITHUB_WORKSPACE\bin\FlashIt.exe"
-          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -DARG_WAILS_AMD64_BINARY="$appPath" -DARG_HELPER_BINARY="$helperPath" build\windows\nsis\project.nsi
+          & "${env:ProgramFiles(x86)}\NSIS\makensis.exe" -DARG_WAILS_AMD64_BINARY="$appPath" build\windows\nsis\project.nsi
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Move-Item -Path bin\flashit-amd64-installer.exe -Destination "bin\flashit-$env:VERSION-windows-x64-installer.exe"
 
@@ -99,7 +95,7 @@ jobs:
         shell: pwsh
         env:
           VERSION: ${{ steps.version.outputs.version }}
-        run: Compress-Archive -Path bin\FlashIt.exe,bin\helpers\flashit-helper.exe -DestinationPath "bin\flashit-$env:VERSION-windows-x64.zip"
+        run: Compress-Archive -Path bin\FlashIt.exe -DestinationPath "bin\flashit-$env:VERSION-windows-x64.zip"
 
       - name: Upload
         uses: actions/upload-artifact@v4

@@ -2,4 +2,3 @@
 
 build/** linguist-generated
 frontend/src/components/ui/** linguist-generated
-helpers/windows/cJSON.* linguist-vendored
