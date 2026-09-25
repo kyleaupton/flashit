@@ -25,7 +25,7 @@ func (Finalize) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 	state.releaseSource(ctx, e)
 
 	e.Emit(core.Event{Type: core.EventLog, Message: "Ejecting USB..."})
-	if state.HelperMounts {
+	if state.HelperEjects {
 		ejectThroughHelper(ctx, state, e)
 	} else if err := drives.Eject(ctx, state.TargetDisk); err != nil {
 		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: eject failed: " + err.Error()})
@@ -43,9 +43,9 @@ const (
 )
 
 // ejectThroughHelper leaves the job succeeded whatever happens: the files
-// are on the stick. Any failure is a warning, since only the helper can
-// unmount the volume it mounted as root; device_busy gets the copy that
-// tells the user what to close.
+// are on the stick. Any failure is a warning, since the stick may still be
+// mounted (on Linux as root, where only the helper can unmount it);
+// device_busy gets the copy that tells the user what to close.
 func ejectThroughHelper(ctx context.Context, state *FlashContext, e core.Executor) {
 	err := state.PrivService.Disk().Eject(ctx, state.TargetDisk)
 	switch {

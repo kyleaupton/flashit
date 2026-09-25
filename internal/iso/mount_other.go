@@ -1,4 +1,4 @@
-//go:build linux
+//go:build !darwin
 
 package iso
 
@@ -7,22 +7,23 @@ import (
 	"errors"
 )
 
-var errMountNotImplemented = errors.New("iso: mount not implemented on linux")
+// Linux and Windows read Windows ISOs in process through isofs.
+var errMountNotImplemented = errors.New("iso: mounting is not used on this host")
 
-type linuxMounter struct{}
+type otherMounter struct{}
 
-func platformMounter() Mounter { return &linuxMounter{} }
+func platformMounter() Mounter { return &otherMounter{} }
 
-func (m *linuxMounter) IsSupported() bool { return false }
+func (m *otherMounter) IsSupported() bool { return false }
 
-func (m *linuxMounter) Mount(ctx context.Context, isoPath string) (*MountResult, error) {
+func (m *otherMounter) Mount(ctx context.Context, isoPath string) (*MountResult, error) {
 	return nil, errMountNotImplemented
 }
 
-func (m *linuxMounter) Unmount(ctx context.Context, result *MountResult) error {
+func (m *otherMounter) Unmount(ctx context.Context, result *MountResult) error {
 	return errMountNotImplemented
 }
 
-func (m *linuxMounter) DetachExisting(ctx context.Context, isoPath string) string {
+func (m *otherMounter) DetachExisting(ctx context.Context, isoPath string) string {
 	return ""
 }

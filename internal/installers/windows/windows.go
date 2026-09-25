@@ -43,6 +43,7 @@ func (w Windows) Plan(ctx context.Context, src sources.SourceInfo, drive drives.
 		TargetDisk:   drive.Device,
 		VolumeName:   defaultVolumeName,
 		HelperMounts: runtime.GOOS == "linux",
+		HelperEjects: runtime.GOOS == "linux" || runtime.GOOS == "windows",
 	}
 
 	if !core.DryRun {

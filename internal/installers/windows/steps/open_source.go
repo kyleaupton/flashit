@@ -12,9 +12,9 @@ import (
 	"github.com/kyleaupton/flashit/internal/pipeline"
 )
 
-// OpenSource makes the ISO's files readable. Where the host cannot mount
-// it (Linux), or when FLASHIT_ISO_READER=go, the image is read in process
-// through isofs, whose Open checks the whole tree; that runs before
+// OpenSource makes the ISO's files readable. Where the host does not mount
+// it (Linux, Windows), or when FLASHIT_ISO_READER=go, the image is read in
+// process through isofs, whose Open checks the whole tree; that runs before
 // FormatUSB, so a bad image never costs the user their drive.
 type OpenSource struct{}
 
