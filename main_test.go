@@ -17,7 +17,9 @@ func TestUpdaterEnabled(t *testing.T) {
 		{"darwin", "0.2.1-4-gfc6a311", false},
 		{"darwin", "0.2", false},
 		{"linux", "0.2.1", false},
-		{"windows", "0.2.1", false},
+		{"windows", "0.2.1", true},
+		{"windows", "dev", false},
+		{"windows", "0.2.1-rc.1", false},
 	} {
 		if got := updaterEnabled(tc.goos, tc.version); got != tc.want {
 			t.Errorf("updaterEnabled(%q, %q) = %v, want %v", tc.goos, tc.version, got, tc.want)
