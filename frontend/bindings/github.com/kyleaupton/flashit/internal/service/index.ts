@@ -5,14 +5,17 @@ import * as DrivesService from "./drivesservice.js";
 import * as JobsService from "./jobsservice.js";
 import * as PrivService from "./privservice.js";
 import * as SourcesService from "./sourcesservice.js";
+import * as UpdaterService from "./updaterservice.js";
 export {
     DrivesService,
     JobsService,
     PrivService,
-    SourcesService
+    SourcesService,
+    UpdaterService
 };
 
 export {
     StartJobRequest,
-    StartJobResponse
+    StartJobResponse,
+    UpdaterInfo
 } from "./models.js";

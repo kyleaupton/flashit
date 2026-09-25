@@ -63,6 +63,31 @@ export class StartJobResponse {
     }
 }
 
+export class UpdaterInfo {
+    "enabled": boolean;
+    "version": string;
+
+    /** Creates a new UpdaterInfo instance. */
+    constructor($$source: Partial<UpdaterInfo> = {}) {
+        if (!("enabled" in $$source)) {
+            this["enabled"] = false;
+        }
+        if (!("version" in $$source)) {
+            this["version"] = "";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new UpdaterInfo instance from a string or object.
+     */
+    static createFrom($$source: any = {}): UpdaterInfo {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new UpdaterInfo($$parsedSource as Partial<UpdaterInfo>);
+    }
+}
+
 // Private type creation functions
 const $$createType0 = core$0.StepInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
