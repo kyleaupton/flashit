@@ -5,7 +5,7 @@
 #
 #   harness.sh build-macos | build-linux     both versions, a fresh test key
 #   harness.sh serve [good|tampered|wrong-key]
-#   harness.sh run-macos [--auto-restart]    launch 0.0.1
+#   harness.sh run-macos [--auto-restart]    launch 0.0.1 (DRY_RUN passes through)
 #   harness.sh run-linux                     install the 0.0.1 deb, launch it
 #
 # The real key is never involved: builds with this tag embed only
@@ -97,6 +97,8 @@ EOF
 run_macos() {
 	local args=(--env "FLASHIT_UPDATE_URL=$URL/manifest.json")
 	[ "${1:-}" = --auto-restart ] && args+=(--env FLASHIT_UPDATE_AUTORESTART=1)
+	# open(1) starts the app with a clean environment.
+	[ -n "${DRY_RUN:-}" ] && args+=(--env "DRY_RUN=$DRY_RUN")
 	pkill -f "$OUT/app/FlashIt.app/Contents/MacOS/FlashIt" 2>/dev/null || true
 	sleep 1
 	# Every run starts from a fresh copy of 0.0.1; an update replaces it.
