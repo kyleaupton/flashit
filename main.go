@@ -38,10 +38,16 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		// Also the Wayland app_id, which is how the shell matches the window
+		// to dev.kyleupton.flashit.desktop and its icon.
+		Linux: application.LinuxOptions{
+			ApplicationID: "dev.kyleupton.flashit",
+		},
 	})
 
 	// Use Wails' logger for unified log format
 	logger.SetLogger(app.Logger)
+	logger.Info("FlashIt starting", "version", Version)
 
 	// Set global event emitter for backend modules
 	eventbus.SetEmitter(func(name string, data any) { app.Event.Emit(name, data) })

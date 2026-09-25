@@ -82,6 +82,7 @@ jobs:
         if: runner.os == 'macOS'
         run: |
           GOOS=linux go vet ./cmd/flashit-helper ./internal/helper/... ./internal/priv/...
+          GOOS=linux go vet -tags production ./internal/priv/...
           GOOS=linux go build -o /dev/null ./cmd/flashit-helper
 
   frontend:

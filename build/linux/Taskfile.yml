@@ -13,6 +13,11 @@ vars:
   # Docker image for cross-compilation (used when building on non-Linux or no CC available)
   CROSS_IMAGE: wails-cross
 
+  # Override with VERSION=1.2.3. Packages need a leading digit, so a tree
+  # with no v tag in reach becomes 0.0.0-<commit>, never a bare hash.
+  VERSION:
+    sh: 'v=$(git describe --tags --match "v[0-9]*" 2>/dev/null) && echo "${v#v}" || echo "0.0.0-$(git rev-parse --short HEAD 2>/dev/null || echo dev)"'
+
 tasks:
   build:
     summary: Builds the application for Linux
@@ -50,7 +55,6 @@ tasks:
           DEV:
             ref: .DEV
       - task: common:generate:icons
-      - task: generate:dotdesktop
       - task: build:helper
     preconditions:
       - sh: '{{if eq .OBFUSCATED "true"}}command -v garble >/dev/null 2>&1{{else}}true{{end}}'
@@ -58,7 +62,7 @@ tasks:
     cmds:
       - '{{if eq .OBFUSCATED "true"}}garble {{.GARBLE_ARGS}} build{{else}}go build{{end}} {{.BUILD_FLAGS}} -o {{.OUTPUT}}'
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}{{if or .EXTRA_TAGS (eq .OBFUSCATED "true")}}-tags {{if eq .OBFUSCATED "true"}}wails_obfuscated{{if .EXTRA_TAGS}},{{end}}{{end}}{{.EXTRA_TAGS}} {{end}}-buildvcs=false -gcflags=all="-l" -ldflags="-X main.Version={{.VERSION}}"{{else}}-tags production{{if eq .OBFUSCATED "true"}},wails_obfuscated{{end}}{{if .EXTRA_TAGS}},{{.EXTRA_TAGS}}{{end}} -trimpath -buildvcs=false -ldflags="-w -s -X main.Version={{.VERSION}}"{{end}}'
       DEFAULT_OUTPUT: '{{.BIN_DIR}}/{{.APP_NAME}}'
       OUTPUT: '{{ .OUTPUT | default .DEFAULT_OUTPUT }}'
     env:
@@ -75,7 +79,6 @@ tasks:
           OBFUSCATED:
             ref: .OBFUSCATED
       - task: common:generate:icons
-      - task: generate:dotdesktop
       - task: build:helper
     preconditions:
       - sh: docker info > /dev/null 2>&1
@@ -103,90 +106,49 @@ tasks:
       - mkdir -p {{.BIN_DIR}}/helpers
       - go build {{.BUILD_FLAGS}} -o {{.BIN_DIR}}/helpers/flashit-helper ./cmd/flashit-helper
     vars:
-      BUILD_FLAGS: '{{if eq .DEV "true"}}-buildvcs=false -gcflags=all="-l"{{else}}-trimpath -buildvcs=false -ldflags="-w -s"{{end}}'
+      BUILD_FLAGS: '{{if eq .DEV "true"}}-buildvcs=false -gcflags=all="-l" -ldflags="-X main.Version={{.VERSION}}"{{else}}-trimpath -buildvcs=false -ldflags="-w -s -X main.Version={{.VERSION}}"{{end}}'
     env:
       GOOS: linux
       GOARCH: '{{.ARCH | default ARCH}}'
       CGO_ENABLED: 0
 
   package:
-    summary: Packages the application for Linux
+    summary: Builds flashit_<ver>_<arch>.deb and flashit-<ver>-1.<arch>.rpm for the host into bin/
+    # The Docker build path does not take the version, and the packages carry
+    # a cgo binary, so this runs natively on the architecture it packages.
+    preconditions:
+      - sh: '[ "{{OS}}" = linux ]'
+        msg: "linux:package runs on Linux, natively for the host architecture"
     deps:
-      - task: build
+      - task: build:native
     cmds:
-      - task: create:appimage
-      - task: create:deb
-      - task: create:rpm
-      - task: create:aur
-
-  create:appimage:
-    summary: Creates an AppImage
-    dir: build/linux/appimage
-    deps:
-      - task: build
-      - task: generate:dotdesktop
-    cmds:
-      - cp "{{.APP_BINARY}}" "{{.APP_NAME}}"
-      - cp ../../appicon.png "{{.APP_NAME}}.png"
-      - wails3 generate appimage -binary "{{.APP_NAME}}" -icon {{.ICON}} -desktopfile {{.DESKTOP_FILE}} -outputdir {{.OUTPUT_DIR}} -builddir {{.ROOT_DIR}}/build/linux/appimage/build
-    vars:
-      APP_NAME: '{{.APP_NAME}}'
-      APP_BINARY: '../../../bin/{{.APP_NAME}}'
-      ICON: '{{.APP_NAME}}.png'
-      DESKTOP_FILE: '../{{.APP_NAME}}.desktop'
-      OUTPUT_DIR: '../../../bin'
-
-  create:deb:
-    summary: Creates a deb package
-    deps:
-      - task: build
-    cmds:
-      - task: generate:dotdesktop
       - task: generate:deb
-
-  create:rpm:
-    summary: Creates a rpm package
-    deps:
-      - task: build
-    cmds:
-      - task: generate:dotdesktop
       - task: generate:rpm
 
-  create:aur:
-    summary: Creates a arch linux packager package
-    deps:
-      - task: build
-    cmds:
-      - task: generate:dotdesktop
-      - task: generate:aur
-
   generate:deb:
-    summary: Creates a deb package
+    summary: Creates the deb package from the current bin/ build
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format deb -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+      - task: nfpm
+        vars: {PACKAGER: deb, STALE: 'flashit_*.deb'}
 
   generate:rpm:
-    summary: Creates a rpm package
+    summary: Creates the rpm package from the current bin/ build
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format rpm -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
+      - task: nfpm
+        vars: {PACKAGER: rpm, STALE: 'flashit-*.rpm'}
 
-  generate:aur:
-    summary: Creates a arch linux packager package
+  nfpm:
+    internal: true
     cmds:
-      - wails3 tool package -name "{{.APP_NAME}}" -format archlinux -config ./build/linux/nfpm/nfpm.yaml -out {{.ROOT_DIR}}/bin
-
-  generate:dotdesktop:
-    summary: Generates a `.desktop` file
-    dir: build
-    cmds:
-      - mkdir -p {{.ROOT_DIR}}/build/linux/appimage
-      - wails3 generate .desktop -name "{{.APP_NAME}}" -exec "{{.EXEC}}" -icon "{{.ICON}}" -outputfile "{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop" -categories "{{.CATEGORIES}}"
+      - rm -f {{.BIN_DIR}}/{{.STALE}}
+      - go run github.com/goreleaser/nfpm/v2/cmd/nfpm@{{.NFPM_VERSION}} package --config build/linux/nfpm/nfpm.yaml --packager {{.PACKAGER}} --target {{.BIN_DIR}}/
     vars:
-      APP_NAME: '{{.APP_NAME}}'
-      EXEC: '{{.APP_NAME}}'
-      ICON: '{{.APP_NAME}}'
-      CATEGORIES: 'Development;'
-      OUTPUTFILE: '{{.ROOT_DIR}}/build/linux/{{.APP_NAME}}.desktop'
+      # The nfpm Wails beta.23 is built against; `wails3 tool package` cannot
+      # give the conventional file names.
+      NFPM_VERSION: v2.44.1
+    env:
+      VERSION: '{{.VERSION}}'
+      GOARCH: '{{ARCH}}'
 
   run:
     cmds:
@@ -199,12 +161,10 @@ tasks:
       Set PGP_KEY in the vars section to override the key configured globally via
       `wails3 setup` (~/.config/wails/defaults.yaml).
       Password is retrieved from system keychain (run: wails3 setup signing)
-    deps:
-      - task: create:deb
     cmds:
       # PGP_KEY is optional: if unset, `wails3 tool sign` falls back to the key
       # configured globally via `wails3 setup`.
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}*.deb" {{if .PGP_KEY}}--pgp-key "{{.PGP_KEY}}"{{end}} {{if .SIGN_ROLE}}--role "{{.SIGN_ROLE}}"{{end}}
+      - wails3 tool sign --input "{{.BIN_DIR}}/flashit_*.deb" {{if .PGP_KEY}}--pgp-key "{{.PGP_KEY}}"{{end}} {{if .SIGN_ROLE}}--role "{{.SIGN_ROLE}}"{{end}}
 
   sign:rpm:
     summary: Signs the RPM package
@@ -213,10 +173,8 @@ tasks:
       Set PGP_KEY in the vars section to override the key configured globally via
       `wails3 setup` (~/.config/wails/defaults.yaml).
       Password is retrieved from system keychain (run: wails3 setup signing)
-    deps:
-      - task: create:rpm
     cmds:
-      - wails3 tool sign --input "{{.BIN_DIR}}/{{.APP_NAME}}*.rpm" {{if .PGP_KEY}}--pgp-key "{{.PGP_KEY}}"{{end}}
+      - wails3 tool sign --input "{{.BIN_DIR}}/flashit-*.rpm" {{if .PGP_KEY}}--pgp-key "{{.PGP_KEY}}"{{end}}
 
   sign:packages:
     summary: Signs all Linux packages (DEB and RPM)
@@ -225,6 +183,8 @@ tasks:
       Set PGP_KEY in the vars section to override the key configured globally via
       `wails3 setup` (~/.config/wails/defaults.yaml).
       Password is retrieved from system keychain (run: wails3 setup signing)
+    deps:
+      - task: package
     cmds:
       - task: sign:deb
       - task: sign:rpm

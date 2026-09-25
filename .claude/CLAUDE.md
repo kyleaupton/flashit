@@ -61,7 +61,7 @@ cmd/wimtest/                 CLI for exercising the WIM splitter
 cmd/isotest/                 CLI comparing isofs with the host mount, per file size and SHA-256
 helpers/windows/             Old C privileged helper for Windows, still shipped
 frontend/src/                Vue app; frontend/bindings/ is generated and committed
-build/                       Per-platform Taskfiles and packaging config
+build/                       Per-platform Taskfiles and packaging config; build/linux holds nfpm.yaml, the polkit policy, the desktop file, icons and smoke-test.sh
 docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 ```
 
@@ -71,6 +71,9 @@ docs/handovers, docs/spikes  Delegated work briefs and spike write-ups
 task dev                  # hot-reload dev build; on macOS assembles and signs bin/FlashIt.dev.app with the helper inside (see DEV_SETUP.md)
 task build                # build for the host OS into bin/
 task darwin:package       # release bundle bin/FlashIt.app (needs APPLE_TEAM_ID; APPLE_SIGNING_IDENTITY or ad hoc)
+task linux:package        # on Linux, for the host arch: bin/flashit_<ver>_<arch>.deb and bin/flashit-<ver>-1.<rpmarch>.rpm; VERSION=1.2.3 overrides git describe
+sudo build/linux/smoke-test.sh bin/flashit_*.deb [ver]   # install, check layout and polkit action, purge; CI runs the same script (rpm in fedora:latest)
+gh workflow run package-linux.yml --ref <branch> [-f version=1.2.3]   # amd64 + arm64 packages, smoke-tested, as artifacts linux-amd64, linux-arm64, linux-sha256sums
 go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only)
 go run ./cmd/isotest <iso>...   # isofs vs hdiutil (macOS) or mount -o loop,ro (Linux, root); exits non-zero on any difference. Run on every Windows ISO at hand before bumping golift.io/udf
 go test -run XXX -fuzz FuzzOpen -fuzztime 10m ./internal/isofs
@@ -92,8 +95,27 @@ Host OS support:
 | Host    | Drive listing | ISO mount | Privileged helper |
 | ------- | ------------- | --------- | ----------------- |
 | macOS   | yes (`diskutil`) | yes (`hdiutil`) | `cmd/flashit-helper` spawned from the bundle as an unprivileged child, socketpair on fd 3; the raw device comes from `authopen` per flash |
-| Linux   | yes (`lsblk`) | not needed, read in process (`internal/isofs`) | `cmd/flashit-helper` spawned via `pkexec`, unix socket |
+| Linux   | yes (`lsblk`) | not needed, read in process (`internal/isofs`) | `cmd/flashit-helper` spawned via `/usr/bin/pkexec`, unix socket |
 | Windows | yes (PowerShell) | yes | named-pipe helper |
+
+Linux ships as `.deb` and `.rpm` only (no AppImage, Flatpak or Snap: none
+can install a root-owned helper or a polkit policy), amd64 and arm64, on the
+GTK4 + WebKitGTK 6 stack: Ubuntu 24.04+, Debian 13+, Fedora 40+. Installed:
+
+| What | Where |
+| --- | --- |
+| App | `/usr/bin/flashit` |
+| Helper | `/usr/libexec/flashit/flashit-helper`, root:root 0755 |
+| Polkit action `dev.kyleupton.flashit.helper` | `/usr/share/polkit-1/actions/dev.kyleupton.flashit.policy`, `auth_admin` everywhere |
+| Desktop file | `/usr/share/applications/dev.kyleupton.flashit.desktop` |
+| Icons | `/usr/share/icons/hicolor/<n>x<n>/apps/flashit.png`, 16 to 512 |
+
+The GTK application id is `dev.kyleupton.flashit`, which is also the Wayland
+app_id that matches the window to the desktop file. The version comes from
+the tag without the `v` (`-X main.Version=` on the app and the helper, and
+the package version); untagged builds say `dev` or `0.0.0-<commit>`.
+`release.yml` calls `package-linux.yml` and attaches its packages and
+`SHA256SUMS`.
 
 Installer support, derived from `Plan` guards:
 
@@ -215,6 +237,14 @@ check is needed (and none would work on macOS external volumes, which mount
 with ownership ignored). A request without a descriptor, or one whose
 descriptor is a pipe, directory or device, is refused; extra descriptors are
 closed unread.
+
+Linux, before any of that: a packaged build (`-tags production`) spawns only
+`/usr/libexec/flashit/flashit-helper`, and refuses unless the helper is a
+regular file, not a symlink, and it and every directory up to `/` are real
+directories owned by root with no group or other write bit
+(`internal/priv/rootowned_unix.go`). That keeps a process running as the
+user from getting a user-writable binary run as root under FlashIt's polkit
+message. Dev builds still look next to the executable and in `helpers/`.
 
 Linux: removable means sysfs `removable` or a USB ancestor; system disks are
 resolved from `/`, `/boot`, `/home` and friends through dm/md slaves (btrfs

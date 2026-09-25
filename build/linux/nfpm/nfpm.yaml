@@ -1,80 +1,102 @@
-# Feel free to remove those if you don't want/need to use them.
-# Make sure to check the documentation at https://nfpm.goreleaser.com
-#
-# The lines below are called `modelines`. See `:help modeline`
-
-name: "flashit"
+# Built by `task linux:package`, which sets VERSION and GOARCH and runs nfpm
+# from the repository root. Package names are checked against Ubuntu 24.04,
+# Debian 13 and Fedora 40+.
+name: flashit
 arch: ${GOARCH}
-platform: "linux"
-version: "0.1.0"
-section: "default"
-priority: "extra"
-maintainer: ${GIT_COMMITTER_NAME} <${GIT_COMMITTER_EMAIL}>
-description: "A program that helps you flash your USB drives"
-vendor: "Kyle Upton"
-homepage: "https://github.com/kyleaupton/flashit"
-license: "GPL-3.0"
-release: "1"
+platform: linux
+version: ${VERSION}
+section: utils
+priority: optional
+maintainer: Kyle Upton <kyleaupton@gmail.com>
+description: |-
+  Write bootable USB installers from ISO images
+  FlashIt writes Linux ISOs raw to a USB drive and turns Windows ISOs into a
+  FAT32 installer, splitting install.wim when it exceeds 4 GB.
+vendor: Kyle Upton
+homepage: https://github.com/kyleaupton/flashit
+license: GPL-3.0
 
 contents:
-  - src: "./bin/FlashIt"
-    dst: "/usr/local/bin/FlashIt"
-  - src: "./build/appicon.png"
-    dst: "/usr/share/icons/hicolor/128x128/apps/FlashIt.png"
-  - src: "./build/linux/FlashIt.desktop"
-    dst: "/usr/share/applications/FlashIt.desktop"
+  - src: ./bin/FlashIt
+    dst: /usr/bin/flashit
+    file_info:
+      mode: 0755
 
-# Default dependencies for the GTK4 + WebKitGTK 6.0 stack (Ubuntu 24.04+ / Debian 13+)
+  # rpm only removes a directory it owns, so claim it.
+  - dst: /usr/libexec/flashit
+    type: dir
+    file_info:
+      mode: 0755
+  # pkexec runs this as root; the packaged app refuses to spawn it unless it
+  # and every directory above it are root's alone.
+  - src: ./bin/helpers/flashit-helper
+    dst: /usr/libexec/flashit/flashit-helper
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+
+  - src: ./build/linux/polkit/dev.kyleupton.flashit.policy
+    dst: /usr/share/polkit-1/actions/dev.kyleupton.flashit.policy
+    file_info:
+      mode: 0644
+  - src: ./build/linux/dev.kyleupton.flashit.desktop
+    dst: /usr/share/applications/dev.kyleupton.flashit.desktop
+    file_info:
+      mode: 0644
+
+  - src: ./build/linux/icons/16x16.png
+    dst: /usr/share/icons/hicolor/16x16/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/24x24.png
+    dst: /usr/share/icons/hicolor/24x24/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/32x32.png
+    dst: /usr/share/icons/hicolor/32x32/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/48x48.png
+    dst: /usr/share/icons/hicolor/48x48/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/64x64.png
+    dst: /usr/share/icons/hicolor/64x64/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/128x128.png
+    dst: /usr/share/icons/hicolor/128x128/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/256x256.png
+    dst: /usr/share/icons/hicolor/256x256/apps/flashit.png
+    file_info: {mode: 0644}
+  - src: ./build/linux/icons/512x512.png
+    dst: /usr/share/icons/hicolor/512x512/apps/flashit.png
+    file_info: {mode: 0644}
+
+# lsblk (app) and partprobe, parted, mkfs.vfat, udevadm (helper). eject is
+# optional: the helper skips it when missing.
 depends:
   - libgtk-4-1
   - libwebkitgtk-6.0-4
+  - pkexec
+  - polkitd
+  - parted
+  - dosfstools
+  - udev
+  - util-linux
 
-# Distribution-specific overrides for different package formats
 overrides:
-  # RPM packages for Fedora / RHEL / AlmaLinux / Rocky Linux
+  deb:
+    recommends:
+      - eject
   rpm:
+    # Fedora ships pkexec in polkit and eject in util-linux.
     depends:
       - gtk4
       - webkitgtk6.0
+      - polkit
+      - parted
+      - dosfstools
+      - systemd-udev
+      - util-linux
 
-  # Arch Linux packages
-  archlinux:
-    depends:
-      - gtk4
-      - webkitgtk-6.0
-
-# scripts section to ensure desktop database is updated after install
 scripts:
-  postinstall: "./build/linux/nfpm/scripts/postinstall.sh"
-  # You can also add preremove, postremove if needed
-  # preremove: "./build/linux/nfpm/scripts/preremove.sh"
-  # postremove: "./build/linux/nfpm/scripts/postremove.sh"
-
-# If you build your app with -tags gtk3 (legacy WebKit2GTK 4.1 stack — supported through v3.0.x, removed in v3.1),
-# replace the depends/overrides above with these:
-#
-# depends:
-#   - libgtk-3-0
-#   - libwebkit2gtk-4.1-0
-# overrides:
-#   rpm:
-#     depends:
-#       - gtk3
-#       - webkit2gtk4.1
-#   archlinux:
-#     depends:
-#       - gtk3
-#       - webkit2gtk-4.1
-#
-# replaces:
-#   - foobar
-# provides:
-#   - bar
-# recommends:
-#   - whatever
-# suggests:
-#   - something-else
-# conflicts:
-#   - not-foo
-#   - not-bar
-# changelog: "changelog.yaml"
+  postinstall: ./build/linux/nfpm/scripts/refresh.sh
+  postremove: ./build/linux/nfpm/scripts/refresh.sh

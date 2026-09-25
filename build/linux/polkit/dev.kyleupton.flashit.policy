@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>FlashIt</vendor>
+  <vendor_url>https://github.com/kyleaupton/flashit</vendor_url>
+  <icon_name>flashit</icon_name>
+
+  <!-- auth_admin, not auth_admin_keep: the app holds one helper for a whole
+       flash, so a cached credential would only widen the window. -->
+  <action id="dev.kyleupton.flashit.helper">
+    <description>Write a USB drive with FlashIt</description>
+    <message>Authentication is required to let FlashIt write to a USB drive</message>
+    <icon_name>flashit</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/flashit/flashit-helper</annotate>
+  </action>
+</policyconfig>
