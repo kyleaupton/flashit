@@ -48,7 +48,7 @@ func TestWriteImageFromHandle(t *testing.T) {
 	if len(images.Asked) != 1 || images.Asked[0] != 0x1a4 {
 		t.Fatalf("asked for %v", images.Asked)
 	}
-	if _, err := images.Opened[0].Stat(); !errors.Is(err, os.ErrClosed) {
+	if err := images.Opened[0].Close(); !errors.Is(err, os.ErrClosed) {
 		t.Fatalf("image left open: %v", err)
 	}
 }
