@@ -161,7 +161,8 @@ macOS release builds only: `main.go` sets it up when `GOOS` is darwin and
 It is the Wails GitHub provider on `kyleaupton/flashit` with the built-in
 window, as in the Wails self-update tutorial. It reads `releases/latest`,
 its default matcher picks `flashit-<ver>-darwin-<arch>.tar.gz` (the DMGs
-say `macos`), and it checks the archive against `SHA256SUMS`. A silent
+say `macos`), and it checks the archive against its line in `SHA256SUMS`
+(with no such line it installs unchecked, silently). A silent
 `Check` runs 5 s after start and opens the window through
 `CheckAndInstall` only when a release is found; FlashIt › Check for
 Updates… runs `CheckAndInstall` directly, so it also shows "up to date".
