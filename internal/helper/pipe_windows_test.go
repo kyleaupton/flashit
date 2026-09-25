@@ -301,6 +301,16 @@ func TestImageHandle(t *testing.T) {
 	_, err = images.Image(uint64(f.Fd()), 4095)
 	wantImageCode(t, err, proto.CodeSizeMismatch)
 
+	// A handle the app could only stat must not come back readable.
+	attrOnly, err := windows.CreateFile(windows.StringToUTF16Ptr(path), windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(attrOnly)
+	_, err = images.Image(uint64(attrOnly), 4096)
+	wantImageCode(t, err, proto.CodeInvalidSource)
+
 	dir, err := windows.CreateFile(windows.StringToUTF16Ptr(t.TempDir()), windows.GENERIC_READ,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
