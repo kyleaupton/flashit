@@ -20,9 +20,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-latest]
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
 
     steps:
+      # gofmt and the tests' fixtures want the files as committed, not
+      # with CRLF line endings.
+      - name: Keep LF line endings
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
       - name: Checkout
         uses: actions/checkout@v6
 
@@ -43,7 +52,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev
+            build-essential pkg-config libgtk-4-dev libwebkitgtk-6.0-dev \
+            dosfstools mtools
 
       # main.go embeds frontend/dist, which is gitignored, so the Go steps
       # below need it built first.
@@ -66,7 +76,11 @@ jobs:
       - name: Build
         run: go build ./...
 
+      # FLASHIT_MTOOLS runs the fatfmt round trip through mtools (Linux
+      # only; the other legs skip it).
       - name: Test
+        env:
+          FLASHIT_MTOOLS: ${{ runner.os == 'Linux' && '1' || '' }}
         run: go test ./...
 
       # The macOS helper is cgo (Security for the authopen authorization,
@@ -84,6 +98,32 @@ jobs:
           GOOS=linux go vet ./cmd/flashit-helper ./internal/helper/... ./internal/priv/...
           GOOS=linux go vet -tags production ./internal/priv/...
           GOOS=linux go build -o /dev/null ./cmd/flashit-helper
+
+      - name: Cross-build for Windows
+        if: runner.os == 'macOS'
+        run: |
+          GOOS=windows go vet ./...
+          GOOS=windows go build -o /dev/null .
+
+  # The Windows disk ops against a VHD the test creates and attaches, which
+  # needs the administrator the runner runs as.
+  windows-disk:
+    name: Windows disk ops (VHD)
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Test
+        env:
+          FLASHIT_VHD_TEST: '1'
+        run: go test -count=1 -v -run '^TestVHD$' ./internal/helper
 
   frontend:
     name: Frontend
