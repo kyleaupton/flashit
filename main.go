@@ -6,6 +6,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"regexp"
 	"runtime"
 	"time"
 
@@ -14,10 +15,11 @@ import (
 	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/logger"
 	"github.com/kyleaupton/flashit/internal/service"
-	"github.com/kyleaupton/flashit/internal/update"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
+	"github.com/wailsapp/wails/v3/pkg/updater"
+	"github.com/wailsapp/wails/v3/pkg/updater/providers/github"
 )
 
 //go:embed all:frontend/dist
@@ -55,18 +57,15 @@ func main() {
 	// Set global event emitter for backend modules
 	eventbus.SetEmitter(func(name string, data any) { app.Event.Emit(name, data) })
 
-	jobsSvc := service.NewJobsService()
-	app.RegisterService(application.NewService(jobsSvc))
-	drivesSvc := service.NewDrivesService()
-	app.RegisterService(application.NewService(drivesSvc))
+	app.RegisterService(application.NewService(service.NewJobsService()))
+	app.RegisterService(application.NewService(service.NewDrivesService()))
 	app.RegisterService(application.NewService(service.NewPrivService()))
 	app.RegisterService(application.NewService(service.NewSourcesService()))
 
-	updates := setupUpdates(app, service.NewJobGate(jobsSvc))
-	app.RegisterService(application.NewService(service.NewUpdateService(app.Context(), updates, app.Browser.OpenURL)))
-	go updates.Run(app.Context(), 10*time.Second, 6*time.Hour)
-	if runtime.GOOS == "darwin" && updates.Mode() != update.Off {
-		app.Menu.Set(macMenu(app))
+	if updaterEnabled(runtime.GOOS, Version) {
+		if err := setupUpdater(app); err != nil {
+			logger.Error("updater disabled", "error", err)
+		}
 	}
 
 	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
@@ -95,39 +94,60 @@ func main() {
 	}
 }
 
-func setupUpdates(app *application.App, gate update.JobGate) *update.Manager {
-	manifestURL, artifactURL, publicKey := updateSource()
-	var observe func(update.State)
-	mgr, err := update.New(app.Updater, update.Config{
-		GOOS:        runtime.GOOS,
-		Version:     Version,
-		ManifestURL: manifestURL,
-		ArtifactURL: artifactURL,
-		PublicKey:   publicKey,
-		Gate:        gate,
-		Emit: func(s update.State) {
-			app.Event.Emit("update:state", s)
-			if observe != nil {
-				observe(s)
-			}
-		},
-	})
-	if err != nil {
-		logger.Error("updater disabled", "error", err)
-		return update.NewManager(update.ManagerConfig{Mode: update.Off, Current: Version})
-	}
-	observe = harnessHooks(mgr)
-	return mgr
+var releaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
+
+// Only a macOS bundle can swap itself in place; Linux lives in root-owned
+// /usr/bin. Any other version string sorts below every release tag, so a dev
+// build would be offered each one.
+func updaterEnabled(goos, version string) bool {
+	return goos == "darwin" && releaseVersion.MatchString(version)
 }
 
-// macMenu is the default menu with Check for Updates… in the app menu. The
-// frontend runs the check so it can say "up to date" or show the error.
+func setupUpdater(app *application.App) error {
+	gh, err := github.New(github.Config{
+		Repository:    "kyleaupton/flashit",
+		ChecksumAsset: "SHA256SUMS",
+	})
+	if err != nil {
+		return err
+	}
+	if err := app.Updater.Init(updater.Config{
+		CurrentVersion: Version,
+		Providers:      []updater.Provider{gh},
+	}); err != nil {
+		return err
+	}
+	app.Menu.Set(macMenu(app))
+
+	// Check silently first: CheckAndInstall opens its window even when there
+	// is nothing to install.
+	go func() {
+		time.Sleep(5 * time.Second)
+		rel, err := app.Updater.Check(app.Context())
+		if err != nil {
+			logger.Error("update check failed", "error", err)
+			return
+		}
+		if rel != nil {
+			checkAndInstall(app)
+		}
+	}()
+	return nil
+}
+
+func checkAndInstall(app *application.App) {
+	if err := app.Updater.CheckAndInstall(app.Context()); err != nil {
+		logger.Error("update failed", "error", err)
+	}
+}
+
+// macMenu is the default menu with Check for Updates… in the app menu.
 func macMenu(app *application.App) *application.Menu {
 	menu := app.NewMenu()
 	appMenu := menu.AddSubmenu("FlashIt")
 	appMenu.AddRole(application.About)
 	appMenu.Add("Check for Updates…").OnClick(func(*application.Context) {
-		app.Event.Emit("update:check-requested")
+		go checkAndInstall(app)
 	})
 	appMenu.AddSeparator()
 	appMenu.AddRole(application.ServicesMenu)
