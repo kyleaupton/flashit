@@ -117,3 +117,47 @@ func TestEnqueue_AllowedAfterCancel(t *testing.T) {
 	<-r2.started
 	close(r2.release)
 }
+
+func TestBlock_RefusedWhileJobRuns(t *testing.T) {
+	events := newStateEvents()
+	m := NewManager(events.emit)
+
+	plan, r := newBlockingPlan()
+	if _, err := m.Enqueue(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	<-r.started
+	if _, err := m.Block(); !errors.Is(err, ErrJobActive) {
+		t.Fatalf("Block during a job: got %v, want ErrJobActive", err)
+	}
+	close(r.release)
+	events.wait(t)
+}
+
+func TestBlock_RefusesEnqueueUntilReleased(t *testing.T) {
+	m := NewManager(func(core.Event) {})
+
+	release, err := m.Block()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Block(); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("second Block: got %v, want ErrBlocked", err)
+	}
+	plan, _ := newBlockingPlan()
+	if _, err := m.Enqueue(context.Background(), plan); !errors.Is(err, ErrBlocked) {
+		t.Fatalf("Enqueue while blocked: got %v, want ErrBlocked", err)
+	}
+	if !errors.Is(m.Busy(), ErrBlocked) {
+		t.Fatal("Busy should report ErrBlocked")
+	}
+
+	release()
+	release()
+	plan, r := newBlockingPlan()
+	if _, err := m.Enqueue(context.Background(), plan); err != nil {
+		t.Fatalf("Enqueue after release: %v", err)
+	}
+	<-r.started
+	close(r.release)
+}
