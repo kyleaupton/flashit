@@ -163,11 +163,14 @@ func TestVHD(t *testing.T) {
 			t.Fatal(err)
 		}
 		err = d.Unmount(path)
-		held.Close()
 		if !errors.Is(err, errVolumeBusy) {
+			held.Close()
 			t.Fatalf("unmount with a file open: %v, want busy", err)
 		}
-		if _, err := d.OpenRaw(path, NopGrant{}); err == nil {
+		raw, err := d.OpenRaw(path, NopGrant{})
+		held.Close()
+		if err == nil {
+			raw.Close()
 			t.Fatal("opened for writing while busy")
 		}
 		if err := d.Unmount(path); err != nil {
