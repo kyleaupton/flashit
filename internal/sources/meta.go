@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"strconv"
 	"strings"
 	"unicode"
@@ -101,6 +102,8 @@ func (v *volume) bootModes() (bios, uefi bool) {
 
 // efiLoaders maps the removable-media loader names UEFI firmware looks for
 // to the architecture they boot, most specific first.
+var trailingCodename = regexp.MustCompile(`\s*"[^"]*"\s*$`)
+
 var efiLoaders = []struct{ name, arch string }{
 	{"BOOTX64.EFI", "x86-64"},
 	{"BOOTAA64.EFI", "ARM64"},
@@ -126,7 +129,7 @@ func linuxMeta(vol *volume, info *SourceInfo) {
 	line, _, _ := strings.Cut(string(b), "\n")
 	// "Ubuntu 24.04.1 LTS "Noble Numbat" - Release amd64 (20240827)"
 	name, _, _ := strings.Cut(line, " - ")
-	info.Name = cleanText(name)
+	info.Name = cleanText(trailingCodename.ReplaceAllString(name, ""))
 }
 
 // wimHeader is the start of a WIM (and ESD) file; only the XML resource's

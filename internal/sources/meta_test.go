@@ -179,7 +179,7 @@ func TestProbe_Metadata(t *testing.T) {
 					"CASPER/FILESYSTEM.SQUASHF": {1},
 				}, biosAndUEFI)
 			},
-			want: SourceInfo{Kind: LinuxISO, Name: `Ubuntu 24.04.1 LTS "Noble Numbat"`, Arch: "x86-64", BIOS: true, UEFI: true},
+			want: SourceInfo{Kind: LinuxISO, Name: "Ubuntu 24.04.1 LTS", Arch: "x86-64", BIOS: true, UEFI: true},
 		},
 		{
 			name: "arm64 uefi only, no disk info",
@@ -238,7 +238,7 @@ func TestProbe_Metadata(t *testing.T) {
 			im: func(*testing.T) *image {
 				return linuxImage(map[string][]byte{".DISK/INFO;1": bigInfo}, nil)
 			},
-			want: SourceInfo{Kind: LinuxISO, Name: `Debian GNU/Linux 12.7.0 "Bookworm"`},
+			want: SourceInfo{Kind: LinuxISO, Name: "Debian GNU/Linux 12.7.0"},
 		},
 		{
 			name: "windows 11 24h2",

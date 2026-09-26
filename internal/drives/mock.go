@@ -62,5 +62,33 @@ func DefaultMockDrives() []Drive {
 			IsEjectable: true,
 			Mountpoints: []string{"/Volumes/FLASH32"},
 		},
+		// The two below are for checking that long names and several
+		// volumes stay inside their boxes.
+		{
+			Device:      "/dev/disk97",
+			BSDName:     "disk97",
+			SizeBytes:   64 * 1000 * 1000 * 1000,
+			Model:       "SanDisk Ultra Fit USB 3.2 Gen 1 Flash Drive USB Device",
+			Vendor:      "SanDisk",
+			Serial:      "4C530001230921118532",
+			Protocol:    "USB",
+			IsRemovable: true,
+			IsEjectable: true,
+		},
+		{
+			Device:      "/dev/disk96",
+			BSDName:     "disk96",
+			SizeBytes:   128 * 1000 * 1000 * 1000,
+			Model:       "Samsung_BAR_Plus",
+			Vendor:      "Samsung",
+			Protocol:    "USB",
+			IsRemovable: true,
+			IsEjectable: true,
+			Mountpoints: []string{
+				"/Volumes/PHOTOS_ARCHIVE_2019_BACKUP",
+				"/Volumes/Untitled Partition With A Long Name",
+				"/Volumes/EFI SYSTEM PARTITION",
+			},
+		},
 	}
 }
