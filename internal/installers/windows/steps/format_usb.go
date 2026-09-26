@@ -19,6 +19,9 @@ func (FormatUSB) HasProgress() bool { return false }
 
 func (FormatUSB) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {
+		if err := pipeline.SimulateApproval(ctx, e); err != nil {
+			return err
+		}
 		return pipeline.Simulate(ctx, e, 2*time.Second, 5)
 	}
 

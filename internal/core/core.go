@@ -67,6 +67,10 @@ type Event struct {
 	// Code is the helper's error code when a failure came from it (a
 	// proto.ErrorCode), so the frontend can act on it without parsing Error.
 	Code string `json:"code,omitempty"`
+	// Bytes and Total are a progress event's position in bytes, when the
+	// step knows them; the frontend derives speed and time left from them.
+	Bytes uint64 `json:"bytes,omitempty"`
+	Total uint64 `json:"total,omitempty"`
 }
 
 type Executor interface {

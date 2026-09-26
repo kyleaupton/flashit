@@ -3,6 +3,7 @@ package steps
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/core"
@@ -18,7 +19,14 @@ func (Write) HasProgress() bool { return true }
 
 func (Write) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {
-		return pipeline.Simulate(ctx, e, 8*time.Second, 20)
+		if err := pipeline.SimulateApproval(ctx, e); err != nil {
+			return err
+		}
+		var size uint64
+		if st, err := os.Stat(state.ISOPath); err == nil {
+			size = uint64(st.Size())
+		}
+		return pipeline.SimulateTransfer(ctx, e, 20*time.Second, 80, size)
 	}
 
 	e.Emit(core.Event{Type: "log", Message: "Starting ISO write (this may take several minutes)..."})
@@ -31,6 +39,8 @@ func (Write) Run(ctx context.Context, state *FlashContext, e core.Executor) erro
 				Type:    "progress",
 				Percent: percent,
 				Message: fmt.Sprintf("%.1f / %.1f GB", float64(bytesWritten)/1e9, float64(totalBytes)/1e9),
+				Bytes:   bytesWritten,
+				Total:   totalBytes,
 			})
 		}
 	}

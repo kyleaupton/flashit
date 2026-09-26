@@ -64,6 +64,8 @@ func (SplitWim) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 				Type:    core.EventProgress,
 				Percent: percent,
 				Message: fmt.Sprintf("Splitting: %.1f%% (part %d of %d)", percent, p.Part, p.TotalParts),
+				Bytes:   p.DoneBytes,
+				Total:   p.TotalBytes,
 			})
 		}
 		return true

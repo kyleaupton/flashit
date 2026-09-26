@@ -31,3 +31,35 @@ func Simulate(ctx context.Context, e core.Executor, delay time.Duration, ticks i
 
 	return nil
 }
+
+// SimulateTransfer is Simulate for a step that moves total bytes, and
+// reports them as it goes.
+func SimulateTransfer(ctx context.Context, e core.Executor, delay time.Duration, ticks int, total uint64) error {
+	tickDuration := delay / time.Duration(ticks)
+	for i := 1; i <= ticks; i++ {
+		select {
+		case <-time.After(tickDuration):
+			done := total * uint64(i) / uint64(ticks)
+			e.Emit(core.Event{
+				Type:    core.EventProgress,
+				Percent: float64(i) / float64(ticks) * 100,
+				Bytes:   done,
+				Total:   total,
+			})
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+// SimulateApproval stands in for the OS prompt before a privileged step.
+func SimulateApproval(ctx context.Context, e core.Executor) error {
+	e.Emit(core.Event{Type: core.EventAuthorizing})
+	select {
+	case <-time.After(2 * time.Second):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	iofs "io/fs"
+	"os"
 	"time"
 
 	"github.com/kyleaupton/flashit/internal/core"
@@ -20,7 +21,11 @@ func (CopyFiles) HasProgress() bool { return true }
 
 func (CopyFiles) Run(ctx context.Context, state *FlashContext, e core.Executor) error {
 	if core.DryRun {
-		return pipeline.Simulate(ctx, e, 5*time.Second, 15)
+		var size uint64
+		if st, err := os.Stat(state.ISOPath); err == nil {
+			size = uint64(st.Size())
+		}
+		return pipeline.SimulateTransfer(ctx, e, 15*time.Second, 60, size)
 	}
 
 	e.Emit(core.Event{Type: "log", Message: "Copying files..."})
@@ -44,6 +49,8 @@ func (CopyFiles) Run(ctx context.Context, state *FlashContext, e core.Executor) 
 				Type:    "progress",
 				Percent: percent,
 				Message: fmt.Sprintf("Copying: %.1f / %.1f GB", float64(p.Written)/1e9, float64(p.Total)/1e9),
+				Bytes:   uint64(p.Written),
+				Total:   uint64(p.Total),
 			})
 		}
 		return true
