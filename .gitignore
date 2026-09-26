@@ -11,5 +11,5 @@ wimlib*/
 wimlib-*
 *.dmg
 .DS_Store
-docs/
+specs/
 spikes/
