@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { FileIcon, Loader2, TriangleAlert } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAppStore, useSourceStore } from '@/stores'
-import { fitMiddle, fontOf, textWidth, useWidth } from '@/composables/fit'
+import { fitMiddle, fontOf, useWidth } from '@/composables/fit'
 import { formatSize, languageName } from '@/lib/utils'
 import { SourceKind } from '@/types'
 
@@ -46,19 +46,25 @@ const chips = computed(() => {
 
 const chipRow = ref<HTMLElement | null>(null)
 const chipRowWidth = useWidth(chipRow)
-// How many chips fit on one row, leaving room for a "+N" chip when some don't.
+// Every chip plus a "+N" template, rendered out of sight, so the fit is
+// measured from the real .chip styles.
+const chipMeasure = ref<HTMLElement | null>(null)
+// Bumped once the measuring row has rendered the current chips.
+const measured = ref(0)
+watch(chips, () => measured.value++, { flush: 'post' })
 const visibleChips = computed(() => {
+  void measured.value
   const all = chips.value
   const width = chipRowWidth.value
-  if (!chipRow.value || !width) return all.length
-  const font = fontOf(chipRow.value, '11.5px', '400')
-  const chipWidth = (t: string) => textWidth(t, font) + 14
-  const gap = 6
+  const measure = chipMeasure.value
+  if (!chipRow.value || !measure || !width) return all.length
+  const widths = Array.from(measure.children, (c) => (c as HTMLElement).offsetWidth)
+  const moreWidth = widths.pop() ?? 0
+  const gap = parseFloat(getComputedStyle(chipRow.value).columnGap) || 0
   let used = 0
   for (let n = 0; n < all.length; n++) {
-    used += (n ? gap : 0) + chipWidth(all[n])
-    const rest = all.length - n - 1
-    const more = rest ? gap + chipWidth(`+${rest}`) : 0
+    used += (n ? gap : 0) + widths[n]
+    const more = n < all.length - 1 ? gap + moreWidth : 0
     if (used + more > width) return n
   }
   return all.length
@@ -71,14 +77,22 @@ const sizeSuffix = computed(() => (info.value?.size ? ` · ${formatSize(info.val
 // Filename cut in the middle so its version and extension stay visible,
 // followed by the size.
 const fileLine = computed(() => {
+  if (!info.value?.name && source.status !== 'probing') return formatSize(info.value?.size ?? 0)
   const f = source.filename ?? ''
   if (!nameLine.value) return f + sizeSuffix.value
   return fitMiddle(f, sizeSuffix.value, nameLineWidth.value, fontOf(nameLine.value)) + sizeSuffix.value
 })
 
+const titleEl = ref<HTMLElement | null>(null)
+const titleWidth = useWidth(titleEl)
+// Without a name the filename is the title: cut in the middle to about two
+// lines, so its version and extension survive, and not repeated below.
 const title = computed(() => {
   if (source.status === 'probing') return 'Reading image…'
-  return info.value?.name || source.filename || ''
+  if (info.value?.name) return info.value.name
+  const f = source.filename ?? ''
+  if (!titleEl.value) return f
+  return fitMiddle(f, '', titleWidth.value * 1.8, fontOf(titleEl.value))
 })
 </script>
 
@@ -104,10 +118,11 @@ const title = computed(() => {
         <Popover v-model:open="popoverOpen">
           <PopoverTrigger as-child :disabled="source.status !== 'ready'">
             <button
+              ref="titleEl"
               type="button"
-              class="line-clamp-2 max-w-full text-left text-[14px] leading-tight font-semibold break-words enabled:hover:underline"
+              class="line-clamp-2 w-full max-w-full text-left text-[14px] leading-tight font-semibold break-words enabled:hover:underline"
               :disabled="source.status !== 'ready'"
-              :title="title"
+              :title="info?.name || source.filename || ''"
             >
               {{ title }}
             </button>
@@ -154,11 +169,17 @@ const title = computed(() => {
           class="overflow-hidden text-[12px] whitespace-nowrap text-muted-foreground"
           :title="`${source.filename ?? ''}${sizeSuffix}`"
         >
-          {{ source.status === 'unusable' && !info ? source.filename : fileLine }}
+          {{ source.status === 'unusable' && !info ? '' : fileLine }}
         </div>
       </div>
     </div>
 
+    <div v-if="source.status === 'ready'" aria-hidden="true" class="pointer-events-none invisible absolute top-0 left-0">
+      <div ref="chipMeasure" class="flex gap-1.5">
+        <span v-for="c in chips" :key="c" class="chip shrink-0">{{ c }}</span>
+        <span class="chip shrink-0">+{{ chips.length }}</span>
+      </div>
+    </div>
     <div v-if="source.status === 'ready'" ref="chipRow" class="mt-auto flex min-w-0 flex-nowrap gap-1.5 overflow-hidden">
       <span v-for="c in chips.slice(0, visibleChips)" :key="c" class="chip shrink-0">{{ c }}</span>
       <button

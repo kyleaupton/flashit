@@ -50,9 +50,12 @@ const nameSuffix = /\s+(USB Device|USB Drive|Flash Drive|Mass Storage Device|Mas
 export function driveName(d: { Model: string; Vendor: string; Device: string }): string {
   const tidy = (s: string) => s.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
   let model = tidy(d.Model)
-  for (let prev = ''; prev !== model; ) {
-    prev = model
-    model = model.replace(nameSuffix, '').trim()
+  // A tail is only noise when a real name is left: "USB Flash Drive" and
+  // "Mass Storage Device" stay as they are.
+  const meaningful = (s: string) => s.split(' ').length >= 2 && !/^(usb|mass|generic)\b/i.test(s)
+  for (let next = model.replace(nameSuffix, '').trim(); next !== model && meaningful(next); ) {
+    model = next
+    next = model.replace(nameSuffix, '').trim()
   }
   const vendor = tidy(d.Vendor)
   if (!model) return vendor || d.Device

@@ -41,13 +41,15 @@ export function useWidth(el: Ref<HTMLElement | null>): Ref<number> {
  */
 export function fitMiddle(text: string, suffix: string, width: number, font: string): string {
   if (!width || textWidth(text + suffix, font) <= width) return text
+  // By code point, so a cut never splits a surrogate pair.
+  const chars = Array.from(text)
   let lo = 1
-  let hi = text.length - 1
+  let hi = chars.length - 1
   let best = '…'
   while (lo <= hi) {
     const keep = Math.floor((lo + hi) / 2)
     const tail = Math.floor(keep / 2)
-    const cut = `${text.slice(0, keep - tail)}…${text.slice(text.length - tail)}`
+    const cut = `${chars.slice(0, keep - tail).join('')}…${chars.slice(chars.length - tail).join('')}`
     if (textWidth(cut + suffix, font) <= width) {
       best = cut
       lo = keep + 1

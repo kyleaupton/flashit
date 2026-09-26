@@ -19,26 +19,22 @@ const driveName = computed(() => (drives.selectedPick ? nameOf(drives.selectedPi
 
 // Copy for the helper's closed error codes; anything else shows the raw
 // message, with the full text in Details.
-const codeCopy: Record<string, { title: string; text: string; untouched?: boolean }> = {
+const codeCopy: Record<string, { title: string; text: string }> = {
   cancelled: {
     title: 'Not approved',
     text: 'The system prompt was dismissed, so nothing was written.',
-    untouched: true,
   },
   not_removable: {
     title: 'Drive refused',
     text: 'The system does not report this drive as removable.',
-    untouched: true,
   },
   system_disk: {
     title: 'Drive refused',
     text: 'This drive holds the running system.',
-    untouched: true,
   },
   insufficient_capacity: {
     title: 'Drive too small',
     text: 'The image is larger than the drive.',
-    untouched: true,
   },
   device_busy: {
     title: 'Drive in use',
@@ -109,8 +105,9 @@ const failure = computed(() => {
   if (!copy && f && f.step.hasProgress && f.percent > 0) {
     title = `${phaseName(f.step)} stopped at ${Math.floor(f.percent)}%`
   }
-  const tail = copy?.untouched ? '' : ` ${driveName.value} is not bootable now.`
-  return { title, text: (copy?.text ?? job.error ?? 'Something went wrong.') + tail }
+  const tail = job.driveTouched ? ` ${driveName.value} is not bootable now.` : ' Nothing was written.'
+  const text = copy?.text ?? job.error ?? 'Something went wrong.'
+  return { title, text: (/[.!?]$/.test(text) ? text : `${text}.`) + tail }
 })
 
 const doneLine = computed(() => {
@@ -120,7 +117,11 @@ const doneLine = computed(() => {
   return `${size}You can remove it now.`
 })
 
-const tccText = 'Allow FlashIt in Privacy & Security › Removable Volumes, then try again. Nothing was written.'
+const tccText = 'Allow FlashIt under Privacy & Security › Files and Folders › Removable Volumes, then try again.'
+
+const cancelledText = computed(() =>
+  job.driveTouched ? `${driveName.value} may not be bootable.` : 'Nothing was written to the drive.',
+)
 
 const canRetry = computed(() => !!drives.selectedDrive && source.isUsable)
 
@@ -225,8 +226,8 @@ const hint = computed(() => {
         <CircleX class="size-5 shrink-0 text-muted-foreground" :stroke-width="1.75" />
         <div class="min-w-0">
           <div class="truncate text-[14px] font-semibold">Stopped</div>
-          <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="`${driveName} may not be bootable.`">
-            {{ driveName }} may not be bootable.
+          <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="cancelledText">
+            {{ cancelledText }}
           </div>
         </div>
       </div>

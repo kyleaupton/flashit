@@ -102,14 +102,14 @@ func (v *volume) bootModes() (bios, uefi bool) {
 
 // efiLoaders maps the removable-media loader names UEFI firmware looks for
 // to the architecture they boot, most specific first.
-var trailingCodename = regexp.MustCompile(`\s*"[^"]*"\s*$`)
-
 var efiLoaders = []struct{ name, arch string }{
 	{"BOOTX64.EFI", "x86-64"},
 	{"BOOTAA64.EFI", "ARM64"},
 	{"BOOTRISCV64.EFI", "RISC-V"},
 	{"BOOTIA32.EFI", "x86"},
 }
+
+var trailingCodename = regexp.MustCompile(`\s*"[^"]*"\s*$`)
 
 func linuxMeta(vol *volume, info *SourceInfo) {
 	for _, l := range efiLoaders {

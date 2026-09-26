@@ -24,8 +24,8 @@ export function phaseName(step: StepState | null | undefined): string {
   return phases[step.key] ?? step.name
 }
 
-// Helper refusals that come before anything is written to the drive.
-const untouchedCodes = new Set(['cancelled', 'not_removable', 'system_disk', 'insufficient_capacity', 'tcc_denied'])
+// Steps that erase or write the drive once the OS prompt is approved.
+const destructiveSteps = new Set(['writing-iso', 'formatting'])
 
 const maxLogLines = 500
 // Weight of the newest sample in the smoothed speed.
@@ -74,7 +74,11 @@ export const useJobStore = defineStore('job', () => {
   // The helper refused before touching the drive because macOS denied
   // FlashIt access to removable volumes; the user can grant it and retry.
   const tccDenied = computed(() => errorCode.value === 'tcc_denied')
-  const driveTouched = computed(() => !(errorCode.value && untouchedCodes.has(errorCode.value)))
+  // Set once a destructive step went past its OS prompt: anything it emits
+  // after authorizing, other than a failed end, means the privileged call
+  // was approved and the drive is being changed.
+  const driveTouched = ref(false)
+  let awaitingApproval = false
   const runningStep = computed(() => steps.value.find((s) => s.status === 'running') ?? null)
   const current = computed(() => (driveId.value ? progress.value[driveId.value] ?? null : null))
 
@@ -135,6 +139,14 @@ export const useJobStore = defineStore('job', () => {
   function processJobEvent(event: JobEvent): void {
     // The prompt is over once the step produces anything else.
     if (event.type !== 'authorizing') isAuthorizing.value = false
+    if (event.type === 'authorizing') awaitingApproval = true
+    else if (
+      awaitingApproval &&
+      destructiveSteps.has(runningStep.value?.key ?? '') &&
+      (event.type === 'progress' || event.type === 'log' || (event.type === 'step-end' && !event.error))
+    ) {
+      driveTouched.value = true
+    }
 
     switch (event.type) {
       case 'state': {
@@ -285,6 +297,8 @@ export const useJobStore = defineStore('job', () => {
     startedAt.value = null
     finishedAt.value = null
     failedAt.value = null
+    driveTouched.value = false
+    awaitingApproval = false
     lastSample = null
   }
 
