@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref } from 'vue'
 import { FileIcon, Loader2, TriangleAlert } from 'lucide-vue-next'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { useAppStore, useSourceStore } from '@/stores'
-import { fitMiddle, fontOf, useWidth } from '@/composables/fit'
-import { formatSize, languageName } from '@/lib/utils'
+import { formatSize, languageName, splitFilename } from '@/lib/utils'
 import { SourceKind } from '@/types'
 
 const source = useSourceStore()
@@ -44,55 +43,22 @@ const chips = computed(() => {
   ].filter(Boolean) as string[]
 })
 
-const chipRow = ref<HTMLElement | null>(null)
-const chipRowWidth = useWidth(chipRow)
-// Every chip plus a "+N" template, rendered out of sight, so the fit is
-// measured from the real .chip styles.
-const chipMeasure = ref<HTMLElement | null>(null)
-// Bumped once the measuring row has rendered the current chips.
-const measured = ref(0)
-watch(chips, () => measured.value++, { flush: 'post' })
-const visibleChips = computed(() => {
-  void measured.value
-  const all = chips.value
-  const width = chipRowWidth.value
-  const measure = chipMeasure.value
-  if (!chipRow.value || !measure || !width) return all.length
-  const widths = Array.from(measure.children, (c) => (c as HTMLElement).offsetWidth)
-  const moreWidth = widths.pop() ?? 0
-  const gap = parseFloat(getComputedStyle(chipRow.value).columnGap) || 0
-  let used = 0
-  for (let n = 0; n < all.length; n++) {
-    used += (n ? gap : 0) + widths[n]
-    const more = n < all.length - 1 ? gap + moreWidth : 0
-    if (used + more > width) return n
-  }
-  return all.length
-})
-const hiddenChips = computed(() => chips.value.length - visibleChips.value)
+// Three boxes at most: four chips (a Windows image with no name) don't fit
+// one row, so two chips and a "+2" stand in for them.
+const MAX_CHIPS = 3
+const shownChips = computed(() => (chips.value.length > MAX_CHIPS ? chips.value.slice(0, MAX_CHIPS - 1) : chips.value))
+const hiddenChips = computed(() => chips.value.slice(shownChips.value.length))
 
-const nameLine = ref<HTMLElement | null>(null)
-const nameLineWidth = useWidth(nameLine)
-const sizeSuffix = computed(() => (info.value?.size ? ` · ${formatSize(info.value.size)}` : ''))
-// Filename cut in the middle so its version and extension stay visible,
-// followed by the size.
-const fileLine = computed(() => {
-  if (!info.value?.name && source.status !== 'probing') return formatSize(info.value?.size ?? 0)
-  const f = source.filename ?? ''
-  if (!nameLine.value) return f + sizeSuffix.value
-  return fitMiddle(f, sizeSuffix.value, nameLineWidth.value, fontOf(nameLine.value)) + sizeSuffix.value
+const sizeText = computed(() => (info.value?.size ? formatSize(info.value.size) : ''))
+// Without a name the filename is the title, so this line is only the size.
+const fileParts = computed((): [string, string] => {
+  if (!info.value?.name && source.status !== 'probing') return ['', '']
+  return splitFilename(source.filename ?? '')
 })
 
-const titleEl = ref<HTMLElement | null>(null)
-const titleWidth = useWidth(titleEl)
-// Without a name the filename is the title: cut in the middle to about two
-// lines, so its version and extension survive, and not repeated below.
 const title = computed(() => {
   if (source.status === 'probing') return 'Reading image…'
-  if (info.value?.name) return info.value.name
-  const f = source.filename ?? ''
-  if (!titleEl.value) return f
-  return fitMiddle(f, '', titleWidth.value * 1.8, fontOf(titleEl.value))
+  return info.value?.name || source.filename || ''
 })
 </script>
 
@@ -118,9 +84,8 @@ const title = computed(() => {
         <Popover v-model:open="popoverOpen">
           <PopoverTrigger as-child :disabled="source.status !== 'ready'">
             <button
-              ref="titleEl"
               type="button"
-              class="line-clamp-2 w-full max-w-full text-left text-[14px] leading-tight font-semibold break-words enabled:hover:underline"
+              class="line-clamp-2 w-full max-w-full text-left text-[14px] leading-tight font-semibold wrap-anywhere enabled:hover:underline"
               :disabled="source.status !== 'ready'"
               :title="info?.name || source.filename || ''"
             >
@@ -164,32 +129,29 @@ const title = computed(() => {
             </p>
           </PopoverContent>
         </Popover>
+        <!-- A middle cut without measuring: the head truncates, the tail and size
+             stay. pre, not nowrap, so a space at the cut doesn't collapse. -->
         <div
-          ref="nameLine"
-          class="overflow-hidden text-[12px] whitespace-nowrap text-muted-foreground"
-          :title="`${source.filename ?? ''}${sizeSuffix}`"
+          class="flex min-w-0 text-[12px] whitespace-pre text-muted-foreground"
+          :title="[source.filename, sizeText].filter(Boolean).join(' · ')"
         >
-          {{ source.status === 'unusable' && !info ? '' : fileLine }}
+          <span class="min-w-0 overflow-hidden text-ellipsis">{{ fileParts[0] }}</span>
+          <span class="shrink-0">{{ fileParts[1] }}</span>
+          <span v-if="sizeText" class="shrink-0">{{ fileParts[0] || fileParts[1] ? ' · ' : '' }}{{ sizeText }}</span>
         </div>
       </div>
     </div>
 
-    <div v-if="source.status === 'ready'" aria-hidden="true" class="pointer-events-none invisible absolute top-0 left-0">
-      <div ref="chipMeasure" class="flex gap-1.5">
-        <span v-for="c in chips" :key="c" class="chip shrink-0">{{ c }}</span>
-        <span class="chip shrink-0">+{{ chips.length }}</span>
-      </div>
-    </div>
-    <div v-if="source.status === 'ready'" ref="chipRow" class="mt-auto flex min-w-0 flex-nowrap gap-1.5 overflow-hidden">
-      <span v-for="c in chips.slice(0, visibleChips)" :key="c" class="chip shrink-0">{{ c }}</span>
+    <div v-if="source.status === 'ready'" class="mt-auto flex min-w-0 gap-1.5 overflow-hidden">
+      <span v-for="c in shownChips" :key="c" class="chip shrink-0">{{ c }}</span>
       <button
-        v-if="hiddenChips > 0"
+        v-if="hiddenChips.length"
         type="button"
         class="chip shrink-0 hover:bg-accent"
-        :title="chips.slice(visibleChips).join(', ')"
+        :title="hiddenChips.join(', ')"
         @click="popoverOpen = true"
       >
-        +{{ hiddenChips }}
+        +{{ hiddenChips.length }}
       </button>
     </div>
     <div

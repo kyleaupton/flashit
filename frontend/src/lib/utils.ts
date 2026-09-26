@@ -63,3 +63,22 @@ export function driveName(d: { Model: string; Vendor: string; Device: string }):
   return `${vendor} ${model}`
 }
 
+const TAIL_MAX = 14
+
+/**
+ * A filename as head and tail for a middle cut in CSS: the head truncates,
+ * the tail (the last separator-delimited runs, up to TAIL_MAX characters)
+ * stays, so "ubuntu-24.04.4-desktop-amd64.iso" keeps "amd64.iso". An empty
+ * tail means don't split.
+ */
+export function splitFilename(name: string): [head: string, tail: string] {
+  const chars = Array.from(name)
+  let start = -1
+  for (let i = chars.length - 1; i > 0; i--) {
+    if (chars.length - i > TAIL_MAX) break
+    if (/[-._ ]/.test(chars[i - 1])) start = i
+  }
+  if (start < 0) start = Math.max(0, chars.length - 10)
+  if ((chars.length - start) * 2 >= chars.length) return [name, '']
+  return [chars.slice(0, start).join(''), chars.slice(start).join('')]
+}
