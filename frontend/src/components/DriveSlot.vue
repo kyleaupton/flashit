@@ -55,7 +55,12 @@ const countLabel = computed(() => {
 
 <template>
   <Popover v-model:open="open">
-    <PopoverAnchor as-child>
+    <!-- One stable anchor: the slot below swaps elements, and an anchor that
+         unmounts leaves the popover positioned against a detached node. It is
+         a line under the slot's header, so the list opens over the slot at
+         the same place whatever the slot's height. -->
+    <div class="relative flex min-h-0 min-w-0">
+      <PopoverAnchor class="pointer-events-none absolute inset-x-0 top-[38px] h-0" />
       <div
         v-if="!pick"
         class="slot-empty"
@@ -114,9 +119,9 @@ const countLabel = computed(() => {
           <span v-else class="truncate">Will erase everything on this drive</span>
         </div>
       </div>
-    </PopoverAnchor>
+    </div>
 
-    <PopoverContent align="end" side="bottom" :side-offset="-164" :avoid-collisions="false" class="w-[300px] p-1.5" @open-auto-focus.prevent>
+    <PopoverContent align="end" side="bottom" :side-offset="0" :collision-padding="8" class="w-[300px] p-1.5" @open-auto-focus.prevent>
       <div class="flex max-h-[226px] flex-col gap-0.5 overflow-y-auto">
         <button
           v-for="d in list"
