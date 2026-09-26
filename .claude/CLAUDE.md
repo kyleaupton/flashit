@@ -43,13 +43,16 @@ and the app's AuthorizationRef shim in `internal/priv/authz_darwin.{c,h}`.
 ## Layout
 
 ```
-main.go, version.go          Wails app entry point, service registration
-host_windows.go              Windows: serve as the privileged helper when started with --privileged-helper (before Wails), log to %LOCALAPPDATA%\FlashIt\logs
+main.go, version.go          Wails app entry point, service registration, window, headless updater, macOS menu
+quit.go                      Quit guard: asks before a quit or window close would kill a running job
+logfile.go                   App log teed to flashit.log in logger.Dir (%LOCALAPPDATA%\FlashIt\logs, ~/Library/Caches/FlashIt/logs, ~/.cache/FlashIt/logs)
+host_windows.go              Windows: serve as the privileged helper when started with --privileged-helper (before Wails)
 internal/core/               Shared contracts: Plan, Runnable, Event, Installer
 internal/pipeline/           Generic typed pipeline (Step[C], cleanup on failure)
-internal/jobs/               Job manager: enqueue (one job at a time), run, cancel
-internal/service/            Wails services: JobsService, DrivesService, SourcesService, PrivService, UpdaterService
-internal/sources/            Pure-Go image probe: ISO 9660 PVD and directory tree (Joliet first), UDF tree, MBR signature; derives the source kind
+internal/jobs/               Job manager: enqueue (one job at a time), run, cancel, CancelActive for the quit guard; holds awake for each job
+internal/awake/              Keep the machine from idle sleep: caffeinate (macOS), systemd-inhibit (Linux), SetThreadExecutionState (Windows)
+internal/service/            Wails services: JobsService, DrivesService, SourcesService, PrivService, UpdaterService, AppService (the ⋯ menu)
+internal/sources/            Pure-Go image probe: ISO 9660 PVD and directory tree (Joliet first), UDF tree, MBR signature, El Torito catalog, .disk/info, EFI loaders, WIM XML; derives the source kind
 internal/installers/linux/   Linux installer + its steps/
 internal/installers/windows/ Windows installer + its steps/
 internal/drives/             Removable drive enumeration per OS (+ mock provider)
@@ -82,7 +85,7 @@ task darwin:updater:archive VERSION=x.y.z   # bin/flashit-<ver>-darwin-<arch>.ta
 task linux:package        # on Linux, for the host arch: bin/flashit_<ver>_<arch>.deb and bin/flashit-<ver>-1.<rpmarch>.rpm; VERSION=1.2.3 overrides git describe
 sudo build/linux/smoke-test.sh bin/flashit_*.deb [ver]   # install, check layout and polkit action, purge; CI runs the same script (rpm in fedora:latest)
 gh workflow run package-linux.yml --ref <branch> [-f version=1.2.3]   # amd64 + arm64 packages, smoke-tested, as artifacts linux-amd64, linux-arm64, linux-sha256sums
-go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/isofs, internal/fs, internal/wim, internal/fatfmt, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only); fatfmt runs fsck.fat (Linux) or fsck_msdos (macOS, 512-byte sectors) on every image when present
+go test -race ./...       # tests live in internal/proto, internal/helper, internal/priv, internal/pipeline, internal/sources, internal/jobs, internal/service, internal/isofs, internal/fs, internal/wim, internal/fatfmt, internal/installers/windows, internal/installers/windows/steps, internal/installers/linux/steps, internal/drives (linux-only); fatfmt runs fsck.fat (Linux) or fsck_msdos (macOS, 512-byte sectors) on every image when present
 FLASHIT_MTOOLS=1 go test -run Mtools ./internal/fatfmt              # Linux: write and read back a 5 GiB (sparse) tree with mtools
 FLASHIT_VHD_TEST=1 go test -v -run '^TestVHD$' ./internal/helper     # Windows, elevated: the disk ops on a VHDX it attaches (format + chkdsk, raw write, busy lock)
 go run ./cmd/isotest <iso>...   # isofs vs hdiutil (macOS) or mount -o loop,ro (Linux, root); exits non-zero on any difference. Run on every Windows ISO at hand before bumping golift.io/udf
@@ -184,26 +187,35 @@ helper mode (keyed on `WAILS_UPDATER_HELPER*` env vars, inside
 macOS and Windows release builds only: `main.go` sets it up when `GOOS` is
 darwin or windows and `Version` is a plain `X.Y.Z` (not `dev`, git describe
 or `0.0.0-dev.N`). It is the Wails GitHub provider on `kyleaupton/flashit`
-with the built-in window, as in the Wails self-update tutorial. It reads
+run headless (`Window: updater.WindowNone`): Wails checks, downloads,
+verifies, unpacks and swaps, and the main window draws every state from
+its `wails:updater:*` events (`frontend/src/stores/update.ts`,
+`UpdateSheet.vue`). It reads
 `releases/latest`; its default matcher takes the first asset naming the
 OS and arch that is not a checksum or `-installer.` file:
 `flashit-<ver>-darwin-<arch>.tar.gz` (the DMGs say `macos`) or
 `flashit-<ver>-windows-x64.zip` (x64 counts as amd64). It checks the
 archive against its line in `SHA256SUMS` (with no such line it installs
 unchecked, silently), unpacks the one entry and swaps it into the running
-bundle or exe. A silent `Check` runs 5 s after start and opens the window
-through `CheckAndInstall` only when a release is found. `UpdaterService`
-reports whether the updater is on and the version; when it is, the app
-shows the version and a "Check for updates" link at the bottom right
-(not in the header: macOS makes its top 50 px a native drag area that
-eats clicks). The link, and FlashIt › Check for Updates… on macOS, run
-`CheckAndInstall` directly, so they also show "up to date". No
-`CheckInterval`. The privileged helper is inside the bundle or is the exe,
+bundle or exe. `UpdaterService` binds `Info` (on or off, the version, the
+updater's state and the release a check already found, so a page loaded
+late catches up), `Check`, `Install` (`DownloadAndInstall`, in the
+background) and `Restart`, which refuses while a job is active. A silent
+`Check` runs 5 s after start; a newer release shows an "Update to X" pill
+beside the title bar's ⋯ (hidden during a job) and a dot on ⋯. The sheet
+shows the notes (Markdown through `marked`, sanitized by DOMPurify, capped,
+links opened in the browser), then download progress, then Restart now.
+"Check for updates…" in the ⋯ menu, and FlashIt › Check for Updates… on
+macOS (which shows the window and emits `updater:check-requested`), open
+the sheet when there is a release and otherwise only toast "FlashIt X is
+the latest version". No "Skip this version" (Wails keeps it in memory
+only) and no `CheckInterval`. With the updater off (Linux, dev builds) the
+menu links the releases page instead. The privileged helper is inside the bundle or is the exe,
 and updates with it. Linux (root-owned `/usr/bin`, update via the package)
 has no updater. A failed swap logs to `wails-update-<old pid>.log` in the
 temp dir (`$TMPDIR` on macOS, `%TEMP%` on Windows).
 
-Accepted, not guarded: restarting during a flash kills the flash; a copy
+Accepted, not guarded: a copy
 run from the DMG or from a folder the user cannot write (an old all-users
 install in `Program Files`) fails the swap and relaunches the old version;
 updates are unsigned, and the SHA-256 only catches corruption.
@@ -213,13 +225,17 @@ updates are unsigned, and the SHA-256 only catches corruption.
 The source kind is probed, never chosen by the user (decision 005).
 `SourcesService.Probe` runs when a file is picked or dropped so the UI can
 show the label, size and kind, or the reason an image is unusable.
-`JobsService.StartJob(SourcePath, DriveID)` probes again, refuses an
-`Unknown` image with its reason, picks the installer by kind, resolves the
-drive from `drives.ListRemovable` (refusing one not listed) and calls
+`JobsService.StartJob(SourcePath, DriveID, SizeBytes, Model, Serial)`
+probes again, refuses an `Unknown` image with its reason, picks the
+installer by kind, resolves the drive from `drives.ListRemovable` (refusing
+one not listed, and with `ErrDriveChanged` one whose size, model or serial
+differs from what the UI showed: device paths are reused when sticks are
+swapped between polls) and calls
 `installer.Plan(ctx, SourceInfo, Drive)`, which returns a `core.Plan`
 wrapping a bound `pipeline.Pipeline`. `jobs.Manager.Enqueue` refuses with
 `ErrJobActive` while a job is pending or running, otherwise stores the job
-and runs it on a cancellable background context. Steps emit through
+and runs it on a cancellable background context, holding `awake.Hold` for
+the life of the job (a hold that fails is logged and ignored). Steps emit through
 `core.Executor`, the manager forwards to `eventbus.Emit("job:event", ev)`,
 and Wails delivers it to the frontend, where `frontend/src/stores/job.ts`
 subscribes with `Events.On('job:event', ...)`.
@@ -241,6 +257,9 @@ type Event struct {
 	Step    string  `json:"step,omitempty"`
 	Percent float64 `json:"percent,omitempty"`
 	Error   string  `json:"error,omitempty"`
+	Code    string  `json:"code,omitempty"`
+	Bytes   uint64  `json:"bytes,omitempty"` // progress: done and total, when the step knows them
+	Total   uint64  `json:"total,omitempty"`
 }
 ```
 
@@ -254,10 +273,22 @@ later step fails; the failing step cleans up after itself (the WIM split
 removes the `.swm` parts it wrote to the volume). `warning` carries text in
 `Message` the user must act on although the job succeeded: an eject that
 the helper answered `device_busy` (the files are written but something
-holds the stick), or on Linux any failed eject of the volume the helper
-mounted. The job store collects warnings per job, and a succeeded
-job with warnings gets `toast.warning` and a warning alert in the done
-view.
+holds the stick), or any other failed eject. Every pipeline ends by
+ejecting the stick on every OS (Linux installer: `Eject` through the
+helper; Windows installer: `Finalize`, through the helper on Linux and
+Windows and `diskutil` on macOS), so the done view says the drive can be
+removed unless a warning came in, in which case it shows the warning.
+Progress events from the write, copy and split steps carry `Bytes` and
+`Total`; the frontend derives speed and time left from them. In dry run
+the write and format steps emit `authorizing` and wait 2 s, standing in for
+the OS prompt.
+
+The quit guard (`quit.go`) is Wails' `ShouldQuit` plus a `WindowClosing`
+hook: while a job is active, a quit from anywhere (menu, ⌘Q, Ctrl+Q, dock,
+the ⋯ menu's Quit, the window's close button) is refused and a native
+question asks "Stop flashing? <drive> won't be bootable." with "Keep
+flashing" as default. "Stop and quit" calls `jobs.Manager.CancelActive`
+and quits once the job's cleanup finishes, or after 15 s.
 
 Wails only delivers `WindowFilesDropped` to Go listeners, so `main.go`
 relays dropped paths to the frontend as a `files:dropped` event.
@@ -265,6 +296,29 @@ relays dropped paths to the frontend as a `files:dropped` event.
 The frontend state machine lives in `frontend/src/stores/app.ts`:
 `idle -> source-probed -> target-selected -> running -> done | failed |
 cancelled`, with `authorizing` as a substate of `running` on the job store.
+The window is a fixed 600x400: an Image slot and a Drive slot side by side
+over a fixed-height action area, and only what is inside each changes. The
+source store's `status` is `empty | probing | ready | unusable` (with
+`downloading` reserved). The drives store keeps `selectedDriveIds` (capped
+at one) and the drive as it was picked; a selected drive that leaves the
+list or comes back with a different size, model or serial is shown as
+disconnected until it is picked again, and a drive that appears is tagged
+"Just connected" for about 10 s. The job store keeps progress, speed and
+time left per drive ID. Steps and log lines are only in the Details sheet.
+The whole window is the drop target except during a job; ⌘/Ctrl+O opens
+the picker, Esc during a job asks to stop in the window, and Enter never
+starts a flash. Colours follow the OS light or dark setting, with the
+system `AccentColor` where the webview supports it.
+
+`SourceInfo` also carries display-only fields, empty when the image does
+not say: `Name` (`.disk/info` up to " - " on Debian and Ubuntu; for
+Windows "Windows 11 24H2" from the WIM build, "(build N)" when the build
+is not one release, as 19041 and 22621 are not), `Arch` (from the
+`EFI/BOOT` loaders for Linux, the WIM's `ARCH` for Windows), `BIOS` and
+`UEFI` (El Torito platforms 0x00 and 0xEF), `Editions` and `Language` (the
+WIM XML). All of it is read from untrusted bytes with caps (XML 4 MiB,
+`.disk/info` 4 KiB, 64 editions, 128 runes a name) and bounds checks; a
+failure to read it never changes `Kind` or `Reason`.
 
 ## Safety rules
 
