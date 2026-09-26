@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/kyleaupton/flashit/internal/awake"
 	"github.com/kyleaupton/flashit/internal/core"
 	"github.com/kyleaupton/flashit/internal/logger"
 	"github.com/kyleaupton/flashit/internal/proto"
@@ -135,6 +136,7 @@ func (m *Manager) cleanupJob(jobID string) {
 
 func (m *Manager) run(ctx context.Context, job *Job) {
 	defer m.cleanupJob(job.ID)
+	defer awake.Hold("Writing a bootable drive")()
 
 	stepInfos := job.Plan.Runnable.StepInfos()
 	logger.Info("job started", "jobID", job.ID, "steps", len(stepInfos))
