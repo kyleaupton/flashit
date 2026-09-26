@@ -16,9 +16,15 @@ import (
 	"github.com/kyleaupton/flashit/internal/sources"
 )
 
+// StartJobRequest names the drive by its device path and by what the UI
+// showed of it. Device paths get reused: a stick swapped between two polls
+// takes the old one's path, so the rest must still match.
 type StartJobRequest struct {
 	SourcePath string
 	DriveID    string
+	SizeBytes  uint64
+	Model      string
+	Serial     string
 }
 
 type StartJobResponse struct {
@@ -80,7 +86,7 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 		inst = s.installers[sources.LinuxISO]
 	}
 
-	drive, err := findRemovable(ctx, req.DriveID)
+	drive, err := findRemovable(ctx, req)
 	if err != nil {
 		return StartJobResponse{}, err
 	}
@@ -105,17 +111,25 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	}, nil
 }
 
-func findRemovable(ctx context.Context, device string) (drives.Drive, error) {
+// ErrDriveChanged is returned when the drive at the requested path is not
+// the one the user picked.
+var ErrDriveChanged = errors.New("the drive changed since it was picked; pick it again")
+
+func findRemovable(ctx context.Context, req StartJobRequest) (drives.Drive, error) {
 	removable, err := drives.ListRemovable(ctx)
 	if err != nil {
 		return drives.Drive{}, fmt.Errorf("failed to list removable drives: %w", err)
 	}
 	for _, d := range removable {
-		if d.Device == device {
-			return d, nil
+		if d.Device != req.DriveID {
+			continue
 		}
+		if d.SizeBytes != req.SizeBytes || d.Model != req.Model || d.Serial != req.Serial {
+			return drives.Drive{}, fmt.Errorf("%s: %w", req.DriveID, ErrDriveChanged)
+		}
+		return d, nil
 	}
-	return drives.Drive{}, fmt.Errorf("%s is not a removable drive", device)
+	return drives.Drive{}, fmt.Errorf("%s is not a removable drive", req.DriveID)
 }
 
 // CancelJob cancels a running job by ID.
