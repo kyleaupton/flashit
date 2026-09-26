@@ -30,6 +30,7 @@ type Job struct {
 	Status    Status
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	done      chan struct{} // closed once run has returned, cleanup included
 }
 
 // ErrJobActive is returned by Enqueue while a job is pending or running.
@@ -81,6 +82,25 @@ func (m *Manager) Cancel(jobID string) bool {
 	return true
 }
 
+// CancelActive cancels the pending or running job, if any, and returns a
+// channel that is closed once it has finished, pipeline cleanup included.
+func (m *Manager) CancelActive() <-chan struct{} {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for id, j := range m.jobs {
+		if j.Status != StatusPending && j.Status != StatusRunning {
+			continue
+		}
+		if cancel, ok := m.cancelFuncs[id]; ok {
+			cancel()
+		}
+		return j.done
+	}
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+
 // Active reports whether a job is pending or running.
 func (m *Manager) Active() bool {
 	m.mu.Lock()
@@ -112,7 +132,7 @@ func (m *Manager) Enqueue(ctx context.Context, plan *core.Plan) (string, error) 
 		return "", ErrJobActive
 	}
 	id := uuid.NewString()
-	job := &Job{ID: id, Plan: plan, Status: StatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	job := &Job{ID: id, Plan: plan, Status: StatusPending, CreatedAt: time.Now(), UpdatedAt: time.Now(), done: make(chan struct{})}
 	m.jobs[id] = job
 	m.cancelFuncs[id] = cancel
 
@@ -135,6 +155,7 @@ func (m *Manager) cleanupJob(jobID string) {
 }
 
 func (m *Manager) run(ctx context.Context, job *Job) {
+	defer close(job.done)
 	defer m.cleanupJob(job.ID)
 	defer awake.Hold("Writing a bootable drive")()
 

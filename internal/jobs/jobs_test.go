@@ -117,3 +117,26 @@ func TestEnqueue_AllowedAfterCancel(t *testing.T) {
 	<-r2.started
 	close(r2.release)
 }
+
+func TestCancelActive_WaitsForTheJob(t *testing.T) {
+	m := NewManager(func(core.Event) {})
+	select {
+	case <-m.CancelActive():
+	default:
+		t.Fatal("CancelActive with no job should be done at once")
+	}
+
+	plan, r := newBlockingPlan()
+	if _, err := m.Enqueue(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	<-r.started
+	select {
+	case <-m.CancelActive():
+	case <-time.After(5 * time.Second):
+		t.Fatal("job did not finish after CancelActive")
+	}
+	if m.Active() {
+		t.Fatal("Active after CancelActive finished")
+	}
+}
