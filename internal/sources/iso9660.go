@@ -14,6 +14,7 @@ const (
 	pvdSector  = 16
 	pvdOffset  = pvdSector * sectorSize
 
+	descTypeBoot          = 0
 	descTypePrimary       = 1
 	descTypeSupplementary = 2
 	descTypeTerminator    = 255
@@ -29,6 +30,7 @@ const (
 
 var (
 	iso9660Magic = []byte("CD001")
+	elTorito     = []byte("EL TORITO SPECIFICATION")
 	mbrSignature = []byte{0x55, 0xAA}
 	// Joliet escape sequences: UCS-2 levels 1, 2 and 3.
 	jolietEscapes = [][]byte{[]byte("%/@"), []byte("%/C"), []byte("%/E")}
@@ -42,6 +44,7 @@ type volume struct {
 	label     string
 	hybrid    bool
 	roots     []dirRef // Joliet first when present, then the primary tree
+	catalog   uint32   // El Torito boot catalog block, 0 when there is none
 }
 
 type dirRef struct {
@@ -56,6 +59,7 @@ type dirEntry struct {
 	name  string
 	dir   bool
 	ref   dirRef
+	parts []dirRef // every extent of a file, in order
 	total int64
 	multi bool // more extents of this file follow
 }
@@ -101,7 +105,11 @@ func readVolume(r io.ReaderAt, size int64) (*volume, error) {
 		if !bytes.Equal(desc[1:6], iso9660Magic) || desc[0] == descTypeTerminator {
 			break
 		}
-		if desc[0] != descTypeSupplementary || !isJoliet(desc[88:91]) {
+		if desc[0] == descTypeBoot && bytes.Equal(desc[7:7+len(elTorito)], elTorito) {
+			v.catalog = binary.LittleEndian.Uint32(desc[71:75])
+			continue
+		}
+		if len(v.roots) > 0 || desc[0] != descTypeSupplementary || !isJoliet(desc[88:91]) {
 			continue
 		}
 		joliet, err := parseRecord(desc[156:190], true)
@@ -109,7 +117,6 @@ func readVolume(r io.ReaderAt, size int64) (*volume, error) {
 			continue
 		}
 		v.roots = append(v.roots, dirRef{extent: joliet.ref.extent, length: joliet.ref.length, joliet: true})
-		break
 	}
 	v.roots = append(v.roots, dirRef{extent: primary.ref.extent, length: primary.ref.length})
 	return v, nil
@@ -126,24 +133,24 @@ func isJoliet(escape []byte) bool {
 
 // lookup finds a file by path, trying each directory tree in order. The
 // second result is false when no tree has it.
-func (v *volume) lookup(path ...string) (int64, bool, error) {
+func (v *volume) lookup(path ...string) (*file, bool, error) {
 	for _, root := range v.roots {
-		size, found, err := v.lookupIn(root, path)
+		f, found, err := v.lookupIn(root, path)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		if found {
-			return size, true, nil
+			return f, true, nil
 		}
 	}
-	return 0, false, nil
+	return nil, false, nil
 }
 
-func (v *volume) lookupIn(dir dirRef, path []string) (int64, bool, error) {
+func (v *volume) lookupIn(dir dirRef, path []string) (*file, bool, error) {
 	for i, name := range path {
 		entries, err := v.readDir(dir)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		var match *dirEntry
 		for j := range entries {
@@ -153,21 +160,29 @@ func (v *volume) lookupIn(dir dirRef, path []string) (int64, bool, error) {
 			}
 		}
 		if match == nil {
-			return 0, false, nil
+			return nil, false, nil
 		}
 		last := i == len(path)-1
 		if last {
 			if match.dir {
-				return 0, false, nil
+				return nil, false, nil
 			}
-			return match.total, true, nil
+			return v.file(match), true, nil
 		}
 		if !match.dir {
-			return 0, false, nil
+			return nil, false, nil
 		}
 		dir = match.ref
 	}
-	return 0, false, nil
+	return nil, false, nil
+}
+
+func (v *volume) file(e *dirEntry) *file {
+	f := &file{r: v.r, image: v.size, size: e.total}
+	for _, p := range e.parts {
+		f.extents = append(f.extents, extent{off: int64(p.extent) * v.blockSize, n: int64(p.length)})
+	}
+	return f
 }
 
 func (v *volume) readDir(dir dirRef) ([]dirEntry, error) {
@@ -209,8 +224,10 @@ func (v *volume) readDir(dir dirRef) ([]dirEntry, error) {
 		if last := len(entries) - 1; last >= 0 && entries[last].multi && !rec.dir && entries[last].name == rec.name {
 			entries[last].total += rec.total
 			entries[last].multi = rec.multi
+			entries[last].parts = append(entries[last].parts, rec.ref)
 			continue
 		}
+		rec.parts = []dirRef{rec.ref}
 		entries = append(entries, rec)
 	}
 	return entries, nil

@@ -19,15 +19,27 @@ const (
 
 // SourceInfo is what Probe learned about an image. Reason is set only when
 // Kind is Unknown and says why the image cannot be used.
+//
+// The fields from Name on are for display and are empty when the image
+// does not say: Name is the distribution or Windows release, Arch is
+// "x86-64", "ARM64", "RISC-V" or "x86" for Linux and "x64", "ARM64" or "x86"
+// for Windows, BIOS and UEFI come from the El Torito boot catalog, and
+// Editions and Language (a tag such as "en-US") from the WIM's XML.
 type SourceInfo struct {
-	Path    string `json:"path"`
-	Size    int64  `json:"size"`
-	Kind    Kind   `json:"kind"`
-	Label   string `json:"label"`
-	Hybrid  bool   `json:"hybrid"`
-	HasWIM  bool   `json:"hasWim"`
-	WIMSize int64  `json:"wimSize"`
-	Reason  string `json:"reason,omitempty"`
+	Path     string   `json:"path"`
+	Size     int64    `json:"size"`
+	Kind     Kind     `json:"kind"`
+	Label    string   `json:"label"`
+	Hybrid   bool     `json:"hybrid"`
+	HasWIM   bool     `json:"hasWim"`
+	WIMSize  int64    `json:"wimSize"`
+	Reason   string   `json:"reason,omitempty"`
+	Name     string   `json:"name"`
+	Arch     string   `json:"arch"`
+	BIOS     bool     `json:"bios"`
+	UEFI     bool     `json:"uefi"`
+	Editions []string `json:"editions"`
+	Language string   `json:"language"`
 }
 
 var wimNames = []string{"install.wim", "install.esd"}
@@ -69,7 +81,7 @@ func probe(f io.ReaderAt, size int64, path string) (SourceInfo, error) {
 	info.Label = vol.label
 	info.Hybrid = vol.hybrid
 
-	wimSize, found, err := findWIM(vol.lookup)
+	wim, found, err := findWIM(vol.lookup)
 	if err != nil {
 		return info, err
 	}
@@ -77,7 +89,7 @@ func probe(f io.ReaderAt, size int64, path string) (SourceInfo, error) {
 		udf, err := readUDF(f, size)
 		switch {
 		case err == nil:
-			wimSize, found, err = findWIM(udf.lookup)
+			wim, found, err = findWIM(udf.lookup)
 		case errors.Is(err, errNoUDF):
 			err = nil
 		}
@@ -90,27 +102,32 @@ func probe(f io.ReaderAt, size int64, path string) (SourceInfo, error) {
 		}
 	}
 	info.HasWIM = found
-	info.WIMSize = wimSize
 
 	switch {
 	case info.HasWIM:
 		info.Kind = WindowsISO
+		info.WIMSize = wim.size
+		windowsMeta(wim, &info)
 	case info.Hybrid:
 		info.Kind = LinuxISO
+		linuxMeta(vol, &info)
 	default:
 		info.Reason = "not a hybrid ISO and no Windows sources"
+	}
+	if info.Kind != Unknown {
+		info.BIOS, info.UEFI = vol.bootModes()
 	}
 	return info, nil
 }
 
-func findWIM(lookup func(path ...string) (int64, bool, error)) (int64, bool, error) {
+func findWIM(lookup func(path ...string) (*file, bool, error)) (*file, bool, error) {
 	for _, name := range wimNames {
-		size, found, err := lookup("sources", name)
+		f, found, err := lookup("sources", name)
 		if err != nil || found {
-			return size, found, err
+			return f, found, err
 		}
 	}
-	return 0, false, nil
+	return nil, false, nil
 }
 
 // probeError is a verdict about the file's contents, as opposed to a read

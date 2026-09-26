@@ -187,8 +187,10 @@ func (v *udfVolume) readExtent(a longAD) ([]byte, error) {
 // fileEntry is what the probe needs from a File Entry: the file's size and,
 // for a directory, where its listing lives.
 type fileEntry struct {
-	size int64
-	data []byte // directory listing, once read
+	size   int64
+	data   []byte // directory listing, once read
+	ads    []byte // allocation descriptors
+	adType uint16
 }
 
 func (v *udfVolume) readFileEntry(icb longAD, wantData bool) (fileEntry, error) {
@@ -223,19 +225,23 @@ func (v *udfVolume) readFileEntry(icb longAD, wantData bool) (fileEntry, error) 
 	if size > math.MaxInt64 {
 		return fileEntry{}, fmt.Errorf("udf: information length %d is implausible", size)
 	}
-	fe := fileEntry{size: int64(size)}
-	if !wantData {
-		return fe, nil
-	}
+	fe := fileEntry{size: int64(size), adType: binary.LittleEndian.Uint16(buf[34:36]) & 7}
 	if uint64(eaLen)+uint64(adLen) > uint64(len(body)) {
+		if !wantData {
+			return fe, nil
+		}
 		return fileEntry{}, errors.New("udf: allocation descriptors overrun the file entry")
 	}
 	ads := body[eaLen : eaLen+adLen]
+	fe.ads = ads
+	if !wantData {
+		return fe, nil
+	}
 	if fe.size > maxDirSize {
 		return fileEntry{}, fmt.Errorf("udf: directory of %d bytes is implausible", fe.size)
 	}
 
-	switch binary.LittleEndian.Uint16(buf[34:36]) & 7 {
+	switch fe.adType {
 	case adEmbedded:
 		fe.data = ads
 	case adShort:
@@ -280,37 +286,78 @@ func (v *udfVolume) appendExtent(fe *fileEntry, ext longAD) error {
 
 // lookup walks the UDF tree from the root. The second result is false when
 // the path does not exist.
-func (v *udfVolume) lookup(path ...string) (int64, bool, error) {
+func (v *udfVolume) lookup(path ...string) (*file, bool, error) {
 	icb := v.rootICB
 	for i, name := range path {
 		dir, err := v.readFileEntry(icb, true)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		child, found, err := findFID(dir.data, name)
 		if err != nil {
-			return 0, false, err
+			return nil, false, err
 		}
 		if !found {
-			return 0, false, nil
+			return nil, false, nil
 		}
 		last := i == len(path)-1
 		if last {
 			if child.dir {
-				return 0, false, nil
+				return nil, false, nil
 			}
 			fe, err := v.readFileEntry(child.icb, false)
 			if err != nil {
-				return 0, false, err
+				return nil, false, err
 			}
-			return fe.size, true, nil
+			return v.file(fe, child.icb.part), true, nil
 		}
 		if !child.dir {
-			return 0, false, nil
+			return nil, false, nil
 		}
 		icb = child.icb
 	}
-	return 0, false, nil
+	return nil, false, nil
+}
+
+// file maps a regular file's allocation descriptors to image offsets. A
+// file larger than 1 GiB spans several extents. Descriptors that cannot be
+// mapped leave the file's size usable and its contents unreadable.
+func (v *udfVolume) file(fe fileEntry, part uint16) *file {
+	f := &file{r: v.r, image: v.size, size: fe.size}
+	var step int
+	switch fe.adType {
+	case adEmbedded:
+		f.inline = fe.ads
+		return f
+	case adShort:
+		step = 8
+	case adLong:
+		step = 16
+	default:
+		f.err = errors.New("udf: extended allocation descriptors are not supported")
+		return f
+	}
+	for pos := 0; pos+step <= len(fe.ads); pos += step {
+		ad := longAD{length: binary.LittleEndian.Uint32(fe.ads[pos:]), block: binary.LittleEndian.Uint32(fe.ads[pos+4:]), part: part}
+		if step == 16 {
+			ad = parseLongAD(fe.ads[pos:])
+		}
+		switch ad.length >> 30 {
+		case 3:
+			f.err = errors.New("udf: chained allocation descriptors are not supported")
+			return f
+		case 0:
+			off, err := v.offset(ad)
+			if err != nil {
+				f.err = err
+				return f
+			}
+			f.extents = append(f.extents, extent{off: off, n: int64(ad.bytes())})
+		default:
+			f.extents = append(f.extents, extent{off: -1, n: int64(ad.bytes())})
+		}
+	}
+	return f
 }
 
 type fid struct {
