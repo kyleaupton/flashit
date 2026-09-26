@@ -29,6 +29,7 @@ func (Finalize) Run(ctx context.Context, state *FlashContext, e core.Executor) e
 		ejectThroughHelper(ctx, state, e)
 	} else if err := drives.Eject(ctx, state.TargetDisk); err != nil {
 		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: eject failed: " + err.Error()})
+		e.Emit(core.Event{Type: core.EventWarning, Message: ejectWarning})
 	}
 
 	e.Emit(core.Event{Type: core.EventLog, Message: "Windows USB created successfully!"})

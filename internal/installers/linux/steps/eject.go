@@ -33,9 +33,13 @@ func (Eject) Run(ctx context.Context, state *FlashContext, e core.Executor) erro
 		e.Emit(core.Event{Type: core.EventWarning, Message: busyWarning})
 	default:
 		e.Emit(core.Event{Type: core.EventLog, Message: "Warning: eject failed: " + err.Error()})
+		e.Emit(core.Event{Type: core.EventWarning, Message: ejectWarning})
 	}
 	return nil
 }
 
-const busyWarning = "The image was written, but the stick is still in use and could not be ejected. " +
-	"Close anything using it, then eject it before removing it."
+const (
+	busyWarning = "The image was written, but the stick is still in use and could not be ejected. " +
+		"Close anything using it, then eject it before removing it."
+	ejectWarning = "The image was written, but the stick could not be ejected. Eject it before removing it."
+)
