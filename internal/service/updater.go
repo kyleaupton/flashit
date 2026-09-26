@@ -8,6 +8,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/updater"
 
+	"github.com/kyleaupton/flashit/internal/eventbus"
 	"github.com/kyleaupton/flashit/internal/logger"
 )
 
@@ -90,8 +91,15 @@ func (s *UpdaterService) Install() error {
 		return ErrUpdaterOff
 	}
 	go func() {
-		if err := s.up.DownloadAndInstall(context.Background()); err != nil {
-			logger.Error("update install failed", "error", err)
+		err := s.up.DownloadAndInstall(context.Background())
+		if err == nil {
+			return
+		}
+		logger.Error("update install failed", "error", err)
+		// Refusals before the download (one already running, nothing
+		// pending) emit no event of their own, and the sheet waits on one.
+		if s.up.State() != updater.StateError {
+			eventbus.Emit(updater.EventError, updater.ErrorInfo{Stage: updater.StageDownload, Message: err.Error()})
 		}
 	}()
 	return nil

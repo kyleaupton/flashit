@@ -95,7 +95,10 @@ const transferLine = computed(() => {
     parts.push(`${fmt(cur.bytes)} of ${fmt(cur.total)} ${unit === 1e9 ? 'GB' : 'MB'}`)
   }
   if (cur.speed) parts.push(`${formatSize(cur.speed)}/s`)
-  if (cur.eta !== null && cur.percent < 100) parts.push(`about ${formatDuration(cur.eta)} left`)
+  // The estimate covers this step only; the Windows copy is followed by a
+  // split of about the same length, so it would promise too early an end.
+  const lastLongStep = !(job.runningStep?.key === 'copying-files' && source.needsSplit)
+  if (cur.eta !== null && cur.percent < 100 && lastLongStep) parts.push(`about ${formatDuration(cur.eta)} left`)
   return parts.join(' · ') || 'Starting…'
 })
 

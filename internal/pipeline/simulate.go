@@ -35,6 +35,9 @@ func Simulate(ctx context.Context, e core.Executor, delay time.Duration, ticks i
 // SimulateTransfer is Simulate for a step that moves total bytes, and
 // reports them as it goes.
 func SimulateTransfer(ctx context.Context, e core.Executor, delay time.Duration, ticks int, total uint64) error {
+	if ticks <= 0 {
+		ticks = 10
+	}
 	tickDuration := delay / time.Duration(ticks)
 	for i := 1; i <= ticks; i++ {
 		select {

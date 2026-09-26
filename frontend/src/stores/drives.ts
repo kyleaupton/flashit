@@ -1,6 +1,7 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
 import { ListDrives } from '@flashit/service/drivesservice'
+import { useJobStore } from './job'
 import type { Drive } from '@/types'
 
 const justConnectedMs = 10_000
@@ -64,6 +65,9 @@ export const useDrivesStore = defineStore('drives', () => {
       loaded.value = true
       error.value = null
 
+      // A drive comes and goes while it is written (format, eject), so it
+      // is only judged between jobs.
+      if (useJobStore().isActive) return
       for (const id of selectedDriveIds.value) {
         const was = picked.value[id]
         const listed = result.find((d) => d.Device === id)

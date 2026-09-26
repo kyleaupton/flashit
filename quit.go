@@ -52,13 +52,20 @@ func (g *quitGuard) ask() {
 	if p := g.jobs.ActivePlan(); p != nil && p.Drive != "" {
 		drive = p.Drive
 	}
+	stopLabel, keepLabel, message := "Stop and quit", "Keep flashing", drive+" won't be bootable."
+	if runtime.GOOS == "windows" {
+		// Wails shows a Windows question as a Yes/No MessageBox and only
+		// calls back buttons labelled exactly that.
+		stopLabel, keepLabel = "Yes", "No"
+		message = "Stop flashing and quit? " + message
+	}
 	d := g.app.Dialog.Question().
 		SetTitle("Stop flashing?").
-		SetMessage(drive + " won't be bootable.").
+		SetMessage(message).
 		AttachToWindow(g.window)
 	// macOS lays buttons out right to left in the order added.
-	stop := d.AddButton("Stop and quit")
-	keep := d.AddButton("Keep flashing")
+	stop := d.AddButton(stopLabel)
+	keep := d.AddButton(keepLabel)
 	d.SetDefaultButton(keep)
 	d.SetCancelButton(keep)
 	keep.OnClick(func() { g.asking.Store(false) })
