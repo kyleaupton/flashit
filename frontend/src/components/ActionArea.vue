@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { CircleCheck, CircleX, KeyRound, Loader2, TriangleAlert } from 'lucide-vue-next'
 import { OpenPrivacySettings } from '@flashit/service/privservice'
@@ -7,6 +7,7 @@ import ProgressBar from '@/components/ProgressBar.vue'
 import { phaseName } from '@/stores/job'
 import { useAppStore, useDrivesStore, useJobStore, useSourceStore } from '@/stores'
 import { driveName as nameOf, formatDuration, formatSize } from '@/lib/utils'
+import { fitEnd, fontOf, textWidth } from '@/composables/fit'
 
 const emit = defineEmits<{ details: [] }>()
 
@@ -16,6 +17,20 @@ const source = useSourceStore()
 const job = useJobStore()
 
 const driveName = computed(() => (drives.selectedPick ? nameOf(drives.selectedPick) : 'the drive'))
+
+// Cut in script, not CSS: a truncated flex item keeps the space before its
+// ellipsis, which read as "USB … and flash".
+const ERASE_MAX = 280
+const eraseBtn = ref<HTMLElement | null>(null)
+const eraseLabel = computed(() => {
+  const name = driveName.value
+  const el = eraseBtn.value
+  if (!el) return `Erase ${name} and flash`
+  const font = fontOf(el)
+  const s = getComputedStyle(el)
+  const room = ERASE_MAX - parseFloat(s.paddingLeft) - parseFloat(s.paddingRight) - 2 - textWidth('Erase  and flash', font)
+  return `Erase ${fitEnd(name, room, font)} and flash`
+})
 
 // Copy for the helper's closed error codes; anything else shows the raw
 // message, with the full text in Details.
@@ -179,9 +194,7 @@ const hint = computed(() => {
         <TriangleAlert v-if="job.warnings.length" class="size-5 shrink-0 text-warn" :stroke-width="1.75" />
         <CircleCheck v-else class="size-5 shrink-0 text-success" :stroke-width="1.75" />
         <div class="min-w-0">
-          <div class="truncate text-[14px] font-semibold" :title="`Done. ${driveName} is bootable.`">
-            Done. {{ driveName }} is bootable.
-          </div>
+          <div class="truncate text-[14px] font-semibold">Done. The drive is bootable.</div>
           <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="doneLine">{{ doneLine }}</div>
         </div>
       </div>
@@ -241,16 +254,15 @@ const hint = computed(() => {
       <span class="min-w-0 truncate text-[12px] text-muted-foreground">Nothing is erased until you approve.</span>
       <button
         type="button"
-        class="btn btn-primary max-w-[280px] min-w-0 gap-[0.28em]"
+        ref="eraseBtn"
+        class="btn btn-primary max-w-[280px] min-w-0"
         :disabled="job.isStarting"
         :title="`Erase ${driveName} and flash`"
         @click="start"
         @keydown.enter.prevent
       >
         <Loader2 v-if="job.isStarting" class="size-3.5 shrink-0 animate-spin" />
-        <span class="shrink-0">Erase</span>
-        <span class="min-w-0 truncate">{{ driveName }}</span>
-        <span class="shrink-0">and flash</span>
+        <span class="min-w-0 truncate">{{ eraseLabel }}</span>
       </button>
     </div>
 

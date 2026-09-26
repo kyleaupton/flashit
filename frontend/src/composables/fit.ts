@@ -59,3 +59,26 @@ export function fitMiddle(text: string, suffix: string, width: number, font: str
   }
   return best
 }
+
+/**
+ * The longest start of text that fits width, cut on a code point with any
+ * trailing space trimmed before the ellipsis.
+ */
+export function fitEnd(text: string, width: number, font: string): string {
+  if (!width || textWidth(text, font) <= width) return text
+  const chars = Array.from(text)
+  let lo = 0
+  let hi = chars.length - 1
+  let best = '…'
+  while (lo <= hi) {
+    const keep = Math.floor((lo + hi) / 2)
+    const cut = `${chars.slice(0, keep).join('').trimEnd()}…`
+    if (textWidth(cut, font) <= width) {
+      best = cut
+      lo = keep + 1
+    } else {
+      hi = keep - 1
+    }
+  }
+  return best
+}
