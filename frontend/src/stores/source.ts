@@ -1,102 +1,90 @@
 import { ref, computed } from 'vue'
 import { defineStore } from 'pinia'
-import { Events } from '@wailsio/runtime'
+import { Dialogs } from '@wailsio/runtime'
 import { Probe } from '@flashit/service/sourcesservice'
-import { formatSize } from '@/lib/utils'
+import { basename } from '@/lib/utils'
 import { SourceKind } from '@/types'
-import type { SourceInfo } from '@/types'
+import type { SourceInfo, SourceStatus } from '@/types'
+
+// Microsoft's install.wim over FAT32's 4 GiB file limit is split into .swm parts.
+const fat32MaxFile = 4 * 1024 * 1024 * 1024 - 1
 
 export const useSourceStore = defineStore('source', () => {
+  const status = ref<SourceStatus>('empty')
   const source = ref<SourceInfo | null>(null)
-  const isAnalyzing = ref(false)
-  // Why the last pick or drop was not taken; shown in the dropzone.
-  const error = ref<string | null>(null)
+  // The path being probed or last picked, so the slot can name the file
+  // even when the probe could not read it.
+  const path = ref<string | null>(null)
+  // Why the image cannot be used: the probe's reason, or why it failed.
+  const reason = ref<string | null>(null)
 
-  let dropUnsubscribe: (() => void) | null = null
   // Two quick drops probe concurrently; only the latest result may land.
   let probeToken = 0
 
-  const hasSource = computed(() => source.value !== null)
-  const filename = computed(() => source.value?.path.split('/').pop() ?? null)
-  const isUsable = computed(
-    () => source.value !== null && source.value.kind !== SourceKind.Unknown
-  )
-  const kindLabel = computed(() => {
-    switch (source.value?.kind) {
-      case SourceKind.LinuxISO:
-        return 'Linux'
-      case SourceKind.WindowsISO:
-        return 'Windows'
-      default:
-        return null
-    }
-  })
-  const fileSizeFormatted = computed(() =>
-    source.value?.size ? formatSize(source.value.size) : null
-  )
+  const filename = computed(() => (path.value ? basename(path.value) : null))
+  const isUsable = computed(() => status.value === 'ready')
+  const isWindows = computed(() => source.value?.kind === SourceKind.WindowsISO)
+  const needsSplit = computed(() => isWindows.value && (source.value?.wimSize ?? 0) > fat32MaxFile)
+  const displayName = computed(() => source.value?.name || filename.value || '')
 
-  async function setSource(path: string): Promise<void> {
+  async function setSource(p: string): Promise<void> {
     const token = ++probeToken
-    isAnalyzing.value = true
-    error.value = null
+    path.value = p
+    source.value = null
+    reason.value = null
+    status.value = 'probing'
 
     try {
-      const info = await Probe(path)
+      const info = await Probe(p)
       if (token !== probeToken) return
       source.value = info
+      if (info.kind === SourceKind.Unknown) {
+        reason.value = info.reason ?? 'This is not an image FlashIt can write.'
+        status.value = 'unusable'
+      } else {
+        status.value = 'ready'
+      }
     } catch (e) {
       if (token !== probeToken) return
-      error.value = e instanceof Error ? e.message : 'Failed to read the image'
-      source.value = null
-    } finally {
-      if (token === probeToken) isAnalyzing.value = false
+      reason.value = e instanceof Error ? e.message : String(e)
+      status.value = 'unusable'
     }
+  }
+
+  async function choose(): Promise<void> {
+    const picked = await Dialogs.OpenFile({
+      Title: 'Choose an image',
+      CanChooseFiles: true,
+      CanChooseDirectories: false,
+      AllowsOtherFiletypes: true,
+      Filters: [
+        { DisplayName: 'Disk images', Pattern: '*.iso;*.img' },
+        { DisplayName: 'All files', Pattern: '*.*' },
+      ],
+    })
+    if (picked) await setSource(picked)
   }
 
   function clearSource(): void {
+    probeToken++
+    status.value = 'empty'
     source.value = null
-    error.value = null
-  }
-
-  // The backend relays Wails' WindowFilesDropped as files:dropped; the
-  // runtime only reports drops on data-file-drop-target elements.
-  function subscribeToDrops(): void {
-    if (dropUnsubscribe) return
-    dropUnsubscribe = Events.On('files:dropped', (ev: Events.WailsEvent) => {
-      const files = (ev.data as { files?: string[] })?.files ?? []
-      if (files.length !== 1) {
-        error.value = 'Drop one image file'
-        return
-      }
-      setSource(files[0])
-    })
-  }
-
-  function unsubscribeFromDrops(): void {
-    dropUnsubscribe?.()
-    dropUnsubscribe = null
-  }
-
-  function $reset(): void {
-    unsubscribeFromDrops()
-    source.value = null
-    isAnalyzing.value = false
-    error.value = null
+    path.value = null
+    reason.value = null
   }
 
   return {
+    status,
     source,
-    isAnalyzing,
-    error,
-    hasSource,
+    path,
+    reason,
     filename,
+    displayName,
     isUsable,
-    kindLabel,
-    fileSizeFormatted,
+    isWindows,
+    needsSplit,
     setSource,
+    choose,
     clearSource,
-    subscribeToDrops,
-    unsubscribeFromDrops,
-    $reset,
   }
 })

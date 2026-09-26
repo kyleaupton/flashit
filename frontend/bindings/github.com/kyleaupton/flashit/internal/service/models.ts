@@ -9,9 +9,54 @@ import { Create as $Create } from "@wailsio/runtime";
 // @ts-ignore: Unused imports
 import * as core$0 from "../core/models.js";
 
+/**
+ * Release is what the update sheet shows of a newer version. Notes is the
+ * GitHub release body, Markdown.
+ */
+export class Release {
+    "version": string;
+    "name": string;
+    "notes": string;
+    "publishedAt": string;
+
+    /** Creates a new Release instance. */
+    constructor($$source: Partial<Release> = {}) {
+        if (!("version" in $$source)) {
+            this["version"] = "";
+        }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("notes" in $$source)) {
+            this["notes"] = "";
+        }
+        if (!("publishedAt" in $$source)) {
+            this["publishedAt"] = "0001-01-01T00:00:00.000Z";
+        }
+
+        Object.assign(this, $$source);
+    }
+
+    /**
+     * Creates a new Release instance from a string or object.
+     */
+    static createFrom($$source: any = {}): Release {
+        let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        return new Release($$parsedSource as Partial<Release>);
+    }
+}
+
+/**
+ * StartJobRequest names the drive by its device path and by what the UI
+ * showed of it. Device paths get reused: a stick swapped between two polls
+ * takes the old one's path, so the rest must still match.
+ */
 export class StartJobRequest {
     "SourcePath": string;
     "DriveID": string;
+    "SizeBytes": number;
+    "Model": string;
+    "Serial": string;
 
     /** Creates a new StartJobRequest instance. */
     constructor($$source: Partial<StartJobRequest> = {}) {
@@ -20,6 +65,15 @@ export class StartJobRequest {
         }
         if (!("DriveID" in $$source)) {
             this["DriveID"] = "";
+        }
+        if (!("SizeBytes" in $$source)) {
+            this["SizeBytes"] = 0;
+        }
+        if (!("Model" in $$source)) {
+            this["Model"] = "";
+        }
+        if (!("Serial" in $$source)) {
+            this["Serial"] = "";
         }
 
         Object.assign(this, $$source);
@@ -67,6 +121,13 @@ export class UpdaterInfo {
     "enabled": boolean;
     "version": string;
 
+    /**
+     * State is the updater's phase ("idle", "available", "downloading",
+     * "ready", ...) so a page loaded mid-flow can catch up.
+     */
+    "state": string;
+    "pending": Release | null;
+
     /** Creates a new UpdaterInfo instance. */
     constructor($$source: Partial<UpdaterInfo> = {}) {
         if (!("enabled" in $$source)) {
@@ -74,6 +135,12 @@ export class UpdaterInfo {
         }
         if (!("version" in $$source)) {
             this["version"] = "";
+        }
+        if (!("state" in $$source)) {
+            this["state"] = "";
+        }
+        if (!("pending" in $$source)) {
+            this["pending"] = null;
         }
 
         Object.assign(this, $$source);
@@ -83,7 +150,11 @@ export class UpdaterInfo {
      * Creates a new UpdaterInfo instance from a string or object.
      */
     static createFrom($$source: any = {}): UpdaterInfo {
+        const $$createField3_0 = $$createType3;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("pending" in $$parsedSource) {
+            $$parsedSource["pending"] = $$createField3_0($$parsedSource["pending"]);
+        }
         return new UpdaterInfo($$parsedSource as Partial<UpdaterInfo>);
     }
 }
@@ -91,3 +162,5 @@ export class UpdaterInfo {
 // Private type creation functions
 const $$createType0 = core$0.StepInfo.createFrom;
 const $$createType1 = $Create.Array($$createType0);
+const $$createType2 = Release.createFrom;
+const $$createType3 = $Create.Nullable($$createType2);

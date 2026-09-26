@@ -1,162 +1,133 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
-import { useColorMode } from '@vueuse/core'
-import { useDrivesStore, useSourceStore, useJobStore, useAppStore } from '@/stores'
-import { Button } from '@/components/ui/button'
-import SourceDropzone from '@/components/SourceDropzone.vue'
-import DriveSelector from '@/components/DriveSelector.vue'
-import ProgressPanel from '@/components/ProgressPanel.vue'
-import StatusAlert from '@/components/StatusAlert.vue'
-import FlashButton from '@/components/FlashButton.vue'
-import { Toaster } from '@/components/ui/sonner'
-import { OpenPrivacySettings } from '@flashit/service/privservice'
-import { CheckForUpdates, Info as UpdaterInfo } from '@flashit/service/updaterservice'
+import { onMounted, onUnmounted, ref } from 'vue'
+import { Events } from '@wailsio/runtime'
+import { ArrowRight, FileDown } from 'lucide-vue-next'
 import { toast } from 'vue-sonner'
 import 'vue-sonner/style.css'
+import { Toaster } from '@/components/ui/sonner'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import TitleBar from '@/components/TitleBar.vue'
+import ImageSlot from '@/components/ImageSlot.vue'
+import DriveSlot from '@/components/DriveSlot.vue'
+import ActionArea from '@/components/ActionArea.vue'
+import DetailsSheet from '@/components/DetailsSheet.vue'
+import UpdateSheet from '@/components/UpdateSheet.vue'
+import { useAppStore, useDrivesStore, useJobStore, useSourceStore, useUpdateStore } from '@/stores'
+import { isMac } from '@/lib/utils'
 
-const drivesStore = useDrivesStore()
-const sourceStore = useSourceStore()
-const jobStore = useJobStore()
-const appStore = useAppStore()
-const updaterVersion = ref<string | null>(null)
+const app = useAppStore()
+const drives = useDrivesStore()
+const source = useSourceStore()
+const job = useJobStore()
+const update = useUpdateStore()
 
-async function handleStartJob() {
-  if (!sourceStore.source || !drivesStore.selectedDrive) return
+const detailsOpen = ref(false)
+const stopOpen = ref(false)
 
-  try {
-    await jobStore.startJob({
-      SourcePath: sourceStore.source.path,
-      DriveID: drivesStore.selectedDrive.Device,
-    })
-  } catch (e) {
-    toast.error('Could not start', {
-      description: e instanceof Error ? e.message : String(e),
-    })
+let unsubscribeDrops: (() => void) | null = null
+
+// The backend relays Wails' WindowFilesDropped as files:dropped; the runtime
+// reports drops only over a data-file-drop-target element, which the root
+// is except during a job.
+function onDrop(ev: Events.WailsEvent) {
+  if (app.isRunning) return
+  const files = (ev.data as { files?: string[] })?.files ?? []
+  if (files.length !== 1) {
+    toast('Drop one image file')
+    return
+  }
+  app.leaveFinished()
+  source.setSource(files[0])
+}
+
+function onKey(e: KeyboardEvent) {
+  const mod = isMac ? e.metaKey : e.ctrlKey
+  if (mod && e.key.toLowerCase() === 'o') {
+    e.preventDefault()
+    if (!app.isRunning) {
+      app.leaveFinished()
+      source.choose()
+    }
+    return
+  }
+  if (e.key === 'Escape' && app.isRunning && !detailsOpen.value && !update.sheetOpen) {
+    e.preventDefault()
+    stopOpen.value = true
   }
 }
 
-function handleReset() {
-  jobStore.clearCurrentJob()
-  sourceStore.clearSource()
-  drivesStore.selectDrive(null)
+async function stop() {
+  stopOpen.value = false
+  await job.cancelJob()
 }
 
 onMounted(() => {
-  const mode = useColorMode()
-  mode.value = 'dark'
+  drives.startAutoRefresh()
+  job.subscribeToEvents()
+  update.load()
+  unsubscribeDrops = Events.On('files:dropped', onDrop)
+  window.addEventListener('keydown', onKey)
+})
 
-  drivesStore.startAutoRefresh()
-  sourceStore.subscribeToDrops()
-  jobStore.subscribeToEvents()
-
-  UpdaterInfo()
-    .then((info) => {
-      if (info.enabled) updaterVersion.value = info.version
-    })
-    .catch(() => {})
+onUnmounted(() => {
+  unsubscribeDrops?.()
+  window.removeEventListener('keydown', onKey)
 })
 </script>
 
 <template>
-  <div class="flex flex-col h-screen bg-background text-foreground">
-    <header class="app-header p-4 text-center">
-      <h1 class="text-xl font-semibold m-0">FlashIt</h1>
-    </header>
+  <div
+    class="app relative flex h-full flex-col overflow-hidden bg-background text-foreground"
+    :data-file-drop-target="app.isRunning ? undefined : ''"
+  >
+    <TitleBar />
+
+    <main class="flex min-h-0 flex-1 flex-col gap-3.5 px-6 pt-5 pb-4">
+      <div class="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_24px_minmax(0,1fr)] gap-2">
+        <ImageSlot />
+        <div class="flex items-center justify-center text-dash">
+          <ArrowRight class="size-5" :stroke-width="1.75" />
+        </div>
+        <DriveSlot />
+      </div>
+      <ActionArea @details="detailsOpen = true" />
+    </main>
+
+    <div class="drop-overlay pointer-events-none absolute inset-2 hidden flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed border-primary bg-background/90 text-primary">
+      <FileDown class="size-8" :stroke-width="1.75" />
+      <span class="text-[14px] font-semibold">Drop the image to use it</span>
+    </div>
+
+    <DetailsSheet v-model:open="detailsOpen" />
+    <UpdateSheet />
+
+    <AlertDialog v-model:open="stopOpen">
+      <AlertDialogContent class="w-[380px] gap-3 p-4">
+        <AlertDialogTitle class="text-[14px]">Stop flashing?</AlertDialogTitle>
+        <AlertDialogDescription class="text-[12.5px]">
+          {{ drives.selectedPick?.Model || 'The drive' }} won't be bootable.
+        </AlertDialogDescription>
+        <AlertDialogFooter class="flex-row justify-end gap-2">
+          <AlertDialogCancel class="btn btn-default h-8 shadow-none">Keep flashing</AlertDialogCancel>
+          <AlertDialogAction class="btn h-8 border-danger bg-danger text-white hover:bg-danger" @click="stop">Stop</AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
 
     <Toaster position="bottom-center" />
-
-    <!-- Selection View: Source + Drive panels -->
-    <main v-if="appStore.isSelecting" class="flex-1 flex flex-col justify-between px-4 pb-4 min-h-0">
-      <div
-        class="flex gap-4 w-full mx-auto transition-all duration-400 ease-out min-h-0"
-        :class="sourceStore.hasSource ? 'max-w-[800px]' : 'max-w-[500px]'"
-      >
-        <div class="flex-1 min-w-0 min-h-0 transition-all duration-400 ease-out">
-          <SourceDropzone />
-        </div>
-        <Transition name="slide-in">
-          <div v-if="sourceStore.isUsable" class="flex-1 min-w-0 min-h-0 flex flex-col">
-            <DriveSelector />
-          </div>
-        </Transition>
-      </div>
-
-      <div
-        v-if="sourceStore.hasSource"
-        class="w-full max-w-[800px] mx-auto mt-4"
-      >
-        <FlashButton
-          :loading="jobStore.isStarting"
-          :disabled="!appStore.canFlash"
-          @click="handleStartJob"
-        />
-      </div>
-    </main>
-
-    <!-- Progress/Status View: Centered -->
-    <main v-else class="flex-1 flex flex-col items-center justify-center px-4 pb-4">
-      <div class="w-full max-w-[400px] flex flex-col gap-6">
-        <ProgressPanel v-if="appStore.state === 'running'" />
-
-        <template v-if="appStore.isFinished">
-          <StatusAlert
-            :status="appStore.state"
-            :error="jobStore.error"
-            :error-code="jobStore.errorCode"
-            :warnings="jobStore.warnings"
-            @open-settings="OpenPrivacySettings()"
-            @retry="handleStartJob"
-          />
-
-          <Button
-            size="lg"
-            variant="secondary"
-            class="w-full h-12 text-base"
-            @click="handleReset"
-          >
-            Start Over
-          </Button>
-        </template>
-      </div>
-    </main>
-
-    <!-- Not in the header: on macOS its top 50px is the native drag area,
-         which takes the click. -->
-    <footer
-      v-if="updaterVersion"
-      class="flex items-center justify-end gap-2 px-4 pb-2 text-xs text-muted-foreground"
-    >
-      <span>v{{ updaterVersion }}</span>
-      <Button
-        variant="link"
-        class="h-auto p-0 text-xs text-muted-foreground hover:text-foreground"
-        @click="CheckForUpdates()"
-      >
-        Check for updates
-      </Button>
-    </footer>
   </div>
 </template>
 
 <style scoped>
-/* Wails window drag region */
-.app-header {
-  --wails-draggable: drag;
-}
-
-/* Slide-in transition for drive panel */
-.slide-in-enter-active {
-  transition: all 0.4s ease;
-  transition-delay: 0.1s;
-}
-
-.slide-in-leave-active {
-  transition: all 0.3s ease;
-}
-
-.slide-in-enter-from,
-.slide-in-leave-to {
-  opacity: 0;
-  transform: translateX(30px);
+.app.file-drop-target-active .drop-overlay {
+  display: flex;
 }
 </style>

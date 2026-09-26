@@ -22,6 +22,12 @@ export enum Kind {
 /**
  * SourceInfo is what Probe learned about an image. Reason is set only when
  * Kind is Unknown and says why the image cannot be used.
+ * 
+ * The fields from Name on are for display and are empty when the image
+ * does not say: Name is the distribution or Windows release, Arch is
+ * "x86-64", "ARM64", "RISC-V" or "x86" for Linux and "x64", "ARM64" or "x86"
+ * for Windows, BIOS and UEFI come from the El Torito boot catalog, and
+ * Editions and Language (a tag such as "en-US") from the WIM's XML.
  */
 export class SourceInfo {
     "path": string;
@@ -32,6 +38,12 @@ export class SourceInfo {
     "hasWim": boolean;
     "wimSize": number;
     "reason"?: string;
+    "name": string;
+    "arch": string;
+    "bios": boolean;
+    "uefi": boolean;
+    "editions": string[];
+    "language": string;
 
     /** Creates a new SourceInfo instance. */
     constructor($$source: Partial<SourceInfo> = {}) {
@@ -56,6 +68,24 @@ export class SourceInfo {
         if (!("wimSize" in $$source)) {
             this["wimSize"] = 0;
         }
+        if (!("name" in $$source)) {
+            this["name"] = "";
+        }
+        if (!("arch" in $$source)) {
+            this["arch"] = "";
+        }
+        if (!("bios" in $$source)) {
+            this["bios"] = false;
+        }
+        if (!("uefi" in $$source)) {
+            this["uefi"] = false;
+        }
+        if (!("editions" in $$source)) {
+            this["editions"] = [];
+        }
+        if (!("language" in $$source)) {
+            this["language"] = "";
+        }
 
         Object.assign(this, $$source);
     }
@@ -64,7 +94,14 @@ export class SourceInfo {
      * Creates a new SourceInfo instance from a string or object.
      */
     static createFrom($$source: any = {}): SourceInfo {
+        const $$createField12_0 = $$createType0;
         let $$parsedSource = typeof $$source === 'string' ? JSON.parse($$source) : $$source;
+        if ("editions" in $$parsedSource) {
+            $$parsedSource["editions"] = $$createField12_0($$parsedSource["editions"]);
+        }
         return new SourceInfo($$parsedSource as Partial<SourceInfo>);
     }
 }
+
+// Private type creation functions
+const $$createType0 = $Create.Array($Create.Any);

@@ -15,19 +15,29 @@ export const useAppStore = defineStore('app', () => {
     if (jobStore.isFailed) return 'failed'
     if (jobStore.isCancelled) return 'cancelled'
     if (jobStore.isComplete) return 'done'
-    if (jobStore.isStarting || jobStore.isPending || jobStore.isRunning) return 'running'
+    if (jobStore.isActive) return 'running'
     if (sourceStore.isUsable && drivesStore.selectedDrive) return 'target-selected'
-    if (sourceStore.hasSource) return 'source-probed'
+    if (sourceStore.status !== 'empty') return 'source-probed'
     return 'idle'
   })
 
-  const isSelecting = computed(() =>
-    ['idle', 'source-probed', 'target-selected'].includes(state.value)
+  const isRunning = computed(() => state.value === 'running')
+  const isFinished = computed(() => ['done', 'failed', 'cancelled'].includes(state.value))
+  const canFlash = computed(
+    () => state.value === 'target-selected' && fits.value
   )
-  const isFinished = computed(() =>
-    ['done', 'failed', 'cancelled'].includes(state.value)
-  )
-  const canFlash = computed(() => state.value === 'target-selected')
+  // The picker disables a drive too small for the image, but a probe can
+  // land after the pick.
+  const fits = computed(() => {
+    const d = drivesStore.selectedDrive
+    const s = sourceStore.source
+    return !d || !s || d.SizeBytes >= s.size
+  })
 
-  return { state, isSelecting, isFinished, canFlash }
+  // Changing the image or drive after a job ends starts a new round.
+  function leaveFinished(): void {
+    if (isFinished.value) jobStore.clearCurrentJob()
+  }
+
+  return { state, isRunning, isFinished, canFlash, fits, leaveFinished }
 })
