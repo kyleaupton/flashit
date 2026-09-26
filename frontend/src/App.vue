@@ -21,7 +21,7 @@ import ActionArea from '@/components/ActionArea.vue'
 import DetailsSheet from '@/components/DetailsSheet.vue'
 import UpdateSheet from '@/components/UpdateSheet.vue'
 import { useAppStore, useDrivesStore, useJobStore, useSourceStore, useUpdateStore } from '@/stores'
-import { isMac } from '@/lib/utils'
+import { driveName, isMac } from '@/lib/utils'
 
 const app = useAppStore()
 const drives = useDrivesStore()
@@ -112,8 +112,8 @@ onUnmounted(() => {
     <AlertDialog v-model:open="stopOpen">
       <AlertDialogContent class="w-[380px] gap-3 p-4">
         <AlertDialogTitle class="text-[14px]">Stop flashing?</AlertDialogTitle>
-        <AlertDialogDescription class="text-[12.5px]">
-          {{ drives.selectedPick?.Model || 'The drive' }} won't be bootable.
+        <AlertDialogDescription class="line-clamp-2 text-[12.5px] break-words">
+          {{ drives.selectedPick ? driveName(drives.selectedPick) : 'The drive' }} won't be bootable.
         </AlertDialogDescription>
         <AlertDialogFooter class="flex-row justify-end gap-2">
           <AlertDialogCancel class="btn btn-default h-8 shadow-none">Keep flashing</AlertDialogCancel>

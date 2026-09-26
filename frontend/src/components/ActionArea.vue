@@ -6,7 +6,7 @@ import { OpenPrivacySettings } from '@flashit/service/privservice'
 import ProgressBar from '@/components/ProgressBar.vue'
 import { phaseName } from '@/stores/job'
 import { useAppStore, useDrivesStore, useJobStore, useSourceStore } from '@/stores'
-import { formatDuration, formatSize } from '@/lib/utils'
+import { driveName as nameOf, formatDuration, formatSize } from '@/lib/utils'
 
 const emit = defineEmits<{ details: [] }>()
 
@@ -15,7 +15,7 @@ const drives = useDrivesStore()
 const source = useSourceStore()
 const job = useJobStore()
 
-const driveName = computed(() => drives.selectedPick?.Model || drives.selectedPick?.Device || 'the drive')
+const driveName = computed(() => (drives.selectedPick ? nameOf(drives.selectedPick) : 'the drive'))
 
 // Copy for the helper's closed error codes; anything else shows the raw
 // message, with the full text in Details.
@@ -120,6 +120,8 @@ const doneLine = computed(() => {
   return `${size}You can remove it now.`
 })
 
+const tccText = 'Allow FlashIt in Privacy & Security › Removable Volumes, then try again. Nothing was written.'
+
 const canRetry = computed(() => !!drives.selectedDrive && source.isUsable)
 
 const hint = computed(() => {
@@ -135,16 +137,16 @@ const hint = computed(() => {
   <div class="flex h-[108px] shrink-0 flex-col justify-center gap-2.5">
     <!-- Waiting on the OS prompt -->
     <template v-if="app.state === 'running' && job.isAuthorizing">
-      <div class="flex items-center justify-between gap-3">
-        <div class="flex items-center gap-2">
-          <KeyRound class="size-4" :stroke-width="1.75" />
-          <span class="text-[14px] font-semibold">Waiting for approval</span>
+      <div class="flex min-w-0 items-center justify-between gap-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <KeyRound class="size-4 shrink-0" :stroke-width="1.75" />
+          <span class="truncate text-[14px] font-semibold">Waiting for approval</span>
         </div>
-        <span class="text-[12px] text-muted-foreground">Approve in the system dialog</span>
+        <span class="truncate text-[12px] text-muted-foreground">Approve in the system dialog</span>
       </div>
       <ProgressBar indeterminate />
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-[12px] text-muted-foreground">The drive has not been touched yet.</span>
+      <div class="flex min-w-0 items-center justify-between gap-3">
+        <span class="min-w-0 truncate text-[12px] text-muted-foreground">The drive has not been touched yet.</span>
         <button type="button" class="btn btn-default" :disabled="job.isCancelling" @click="job.cancelJob()">
           Cancel
         </button>
@@ -152,15 +154,15 @@ const hint = computed(() => {
     </template>
 
     <template v-else-if="app.state === 'running'">
-      <div class="flex items-baseline justify-between gap-3">
-        <span class="text-[14px] font-semibold">{{ job.isCancelling ? 'Stopping' : phase }}</span>
-        <span v-if="showsPercent" class="text-[22px] leading-none font-semibold tabular-nums">
+      <div class="flex min-w-0 items-baseline justify-between gap-3">
+        <span class="min-w-0 truncate text-[14px] font-semibold">{{ job.isCancelling ? 'Stopping' : phase }}</span>
+        <span v-if="showsPercent" class="shrink-0 text-[22px] leading-none font-semibold tabular-nums">
           {{ Math.floor(p?.percent ?? 0) }}%
         </span>
       </div>
       <ProgressBar :value="p?.percent ?? 0" :indeterminate="!showsPercent || job.isCancelling" />
-      <div class="flex items-center justify-between gap-3">
-        <span class="truncate text-[12px] text-muted-foreground tabular-nums">{{ transferLine }}</span>
+      <div class="flex min-w-0 items-center justify-between gap-3">
+        <span class="min-w-0 truncate text-[12px] text-muted-foreground tabular-nums" :title="transferLine">{{ transferLine }}</span>
         <div class="flex shrink-0 gap-2">
           <button type="button" class="btn btn-default" @click="emit('details')">Details</button>
           <button type="button" class="btn btn-default" :disabled="job.isCancelling" @click="job.cancelJob()">
@@ -171,13 +173,15 @@ const hint = computed(() => {
       </div>
     </template>
 
-    <div v-else-if="app.state === 'done'" class="flex items-center justify-between gap-3">
-      <div class="flex min-w-0 items-center gap-2.5">
+    <div v-else-if="app.state === 'done'" class="flex min-w-0 items-center justify-between gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
         <TriangleAlert v-if="job.warnings.length" class="size-5 shrink-0 text-warn" :stroke-width="1.75" />
         <CircleCheck v-else class="size-5 shrink-0 text-success" :stroke-width="1.75" />
         <div class="min-w-0">
-          <div class="truncate text-[14px] font-semibold">Done. {{ driveName }} is bootable.</div>
-          <div class="line-clamp-2 text-[12px] text-muted-foreground">{{ doneLine }}</div>
+          <div class="truncate text-[14px] font-semibold" :title="`Done. ${driveName} is bootable.`">
+            Done. {{ driveName }} is bootable.
+          </div>
+          <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="doneLine">{{ doneLine }}</div>
         </div>
       </div>
       <div class="flex shrink-0 gap-2">
@@ -186,14 +190,12 @@ const hint = computed(() => {
       </div>
     </div>
 
-    <div v-else-if="app.state === 'failed' && job.tccDenied" class="flex items-center justify-between gap-3">
-      <div class="flex min-w-0 items-center gap-2.5">
+    <div v-else-if="app.state === 'failed' && job.tccDenied" class="flex min-w-0 items-center justify-between gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
         <KeyRound class="size-5 shrink-0 text-primary" :stroke-width="1.75" />
         <div class="min-w-0">
-          <div class="text-[14px] font-semibold">Permission needed</div>
-          <div class="text-[12px] leading-snug text-muted-foreground">
-            Allow FlashIt under Privacy &amp; Security › Files and Folders › Removable Volumes. Nothing was written.
-          </div>
+          <div class="truncate text-[14px] font-semibold">Permission needed</div>
+          <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="tccText">{{ tccText }}</div>
         </div>
       </div>
       <div class="flex shrink-0 flex-col gap-1.5">
@@ -202,12 +204,14 @@ const hint = computed(() => {
       </div>
     </div>
 
-    <div v-else-if="app.state === 'failed'" class="flex items-center justify-between gap-3">
-      <div class="flex min-w-0 items-center gap-2.5">
+    <div v-else-if="app.state === 'failed'" class="flex min-w-0 items-center justify-between gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
         <CircleX class="size-5 shrink-0 text-danger" :stroke-width="1.75" />
         <div class="min-w-0">
-          <div class="truncate text-[14px] font-semibold">{{ failure.title }}</div>
-          <div class="selectable line-clamp-2 text-[12px] text-muted-foreground">{{ failure.text }}</div>
+          <div class="truncate text-[14px] font-semibold" :title="failure.title">{{ failure.title }}</div>
+          <div class="selectable line-clamp-2 text-[12px] leading-snug break-words text-muted-foreground" :title="failure.text">
+            {{ failure.text }}
+          </div>
         </div>
       </div>
       <div class="flex shrink-0 gap-2">
@@ -216,12 +220,14 @@ const hint = computed(() => {
       </div>
     </div>
 
-    <div v-else-if="app.state === 'cancelled'" class="flex items-center justify-between gap-3">
-      <div class="flex min-w-0 items-center gap-2.5">
+    <div v-else-if="app.state === 'cancelled'" class="flex min-w-0 items-center justify-between gap-3">
+      <div class="flex min-w-0 flex-1 items-center gap-2.5">
         <CircleX class="size-5 shrink-0 text-muted-foreground" :stroke-width="1.75" />
         <div class="min-w-0">
-          <div class="text-[14px] font-semibold">Stopped</div>
-          <div class="text-[12px] text-muted-foreground">{{ driveName }} may not be bootable.</div>
+          <div class="truncate text-[14px] font-semibold">Stopped</div>
+          <div class="line-clamp-2 text-[12px] leading-snug text-muted-foreground" :title="`${driveName} may not be bootable.`">
+            {{ driveName }} may not be bootable.
+          </div>
         </div>
       </div>
       <div class="flex shrink-0 gap-2">
@@ -230,23 +236,25 @@ const hint = computed(() => {
       </div>
     </div>
 
-    <template v-else-if="app.state === 'target-selected' && app.canFlash">
-      <div class="flex items-center justify-between gap-3">
-        <span class="text-[12px] leading-snug text-muted-foreground">
-          Your system may ask for your password.<br />Nothing is erased until you approve.
-        </span>
-        <button type="button" class="btn btn-primary max-w-[300px]" :disabled="job.isStarting" @click="start" @keydown.enter.prevent>
-          <Loader2 v-if="job.isStarting" class="size-3.5 animate-spin" />
-          <span class="truncate">Erase {{ driveName }} and flash</span>
-        </button>
-      </div>
-      <span v-if="source.needsSplit" class="text-[12px] text-muted-foreground">
-        install.wim is over 4 GB, so it will be split into parts that fit FAT32.
-      </span>
-    </template>
+    <div v-else-if="app.state === 'target-selected' && app.canFlash" class="flex min-w-0 items-center justify-between gap-3">
+      <span class="min-w-0 truncate text-[12px] text-muted-foreground">Nothing is erased until you approve.</span>
+      <button
+        type="button"
+        class="btn btn-primary max-w-[280px] min-w-0 gap-[0.28em]"
+        :disabled="job.isStarting"
+        :title="`Erase ${driveName} and flash`"
+        @click="start"
+        @keydown.enter.prevent
+      >
+        <Loader2 v-if="job.isStarting" class="size-3.5 shrink-0 animate-spin" />
+        <span class="shrink-0">Erase</span>
+        <span class="min-w-0 truncate">{{ driveName }}</span>
+        <span class="shrink-0">and flash</span>
+      </button>
+    </div>
 
-    <div v-else class="flex items-center justify-between gap-3">
-      <span class="text-[13px] text-muted-foreground">{{ hint }}</span>
+    <div v-else class="flex min-w-0 items-center justify-between gap-3">
+      <span class="line-clamp-2 min-w-0 text-[13px] leading-snug text-muted-foreground">{{ hint }}</span>
       <button type="button" class="btn btn-primary min-w-24" disabled>Flash</button>
     </div>
   </div>

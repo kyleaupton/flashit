@@ -43,3 +43,20 @@ export function languageName(tag: string): string {
 }
 
 export const isMac = /Mac/.test(navigator.platform)
+
+const nameSuffix = /\s+(USB Device|USB Drive|Flash Drive|Mass Storage Device|Mass Storage|Storage Device|SCSI Disk Device|Media)$/i
+
+/** A drive's model as people call it: no "USB Device" tails, no repeated vendor. */
+export function driveName(d: { Model: string; Vendor: string; Device: string }): string {
+  const tidy = (s: string) => s.replace(/_/g, ' ').replace(/\s+/g, ' ').trim()
+  let model = tidy(d.Model)
+  for (let prev = ''; prev !== model; ) {
+    prev = model
+    model = model.replace(nameSuffix, '').trim()
+  }
+  const vendor = tidy(d.Vendor)
+  if (!model) return vendor || d.Device
+  if (!vendor || model.toLowerCase().startsWith(vendor.toLowerCase())) return model
+  return `${vendor} ${model}`
+}
+

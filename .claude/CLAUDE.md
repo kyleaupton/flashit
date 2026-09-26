@@ -311,7 +311,7 @@ starts a flash. Colours follow the OS light or dark setting, with the
 system `AccentColor` where the webview supports it.
 
 `SourceInfo` also carries display-only fields, empty when the image does
-not say: `Name` (`.disk/info` up to " - " on Debian and Ubuntu; for
+not say: `Name` (`.disk/info` up to " - " on Debian and Ubuntu, less a trailing quoted codename; for
 Windows "Windows 11 24H2" from the WIM build, "(build N)" when the build
 is not one release, as 19041 and 22621 are not), `Arch` (from the
 `EFI/BOOT` loaders for Linux, the WIM's `ARCH` for Windows), `BIOS` and

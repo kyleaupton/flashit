@@ -35,6 +35,15 @@ const progressLine = computed(() => {
   return `${formatSize(update.written)} of ${formatSize(update.total)}`
 })
 
+// The first focusable element would be a link in the notes, drawn with a
+// focus ring; the primary button is the better start.
+function focusPrimary(e: Event) {
+  e.preventDefault()
+  const content = (e.target as HTMLElement | null) ?? document
+  const button = content.querySelector<HTMLButtonElement>('[data-autofocus]:not(:disabled)')
+  ;(button ?? (e.target as HTMLElement | null))?.focus()
+}
+
 // Links in the notes open in the browser, never in the webview.
 function onNotesClick(e: MouseEvent) {
   const a = (e.target as HTMLElement).closest('a')
@@ -47,33 +56,37 @@ function onNotesClick(e: MouseEvent) {
 
 <template>
   <Dialog v-model:open="update.sheetOpen">
-    <DialogContent class="flex max-h-[340px] w-[480px] max-w-[calc(100%-2rem)] flex-col gap-3 p-4" :show-close-button="!busy">
+    <DialogContent
+      class="flex max-h-[340px] w-[480px] max-w-[calc(100%-2rem)] flex-col gap-3 p-4 outline-none"
+      :show-close-button="!busy"
+      @open-auto-focus="focusPrimary"
+    >
       <template v-if="update.phase === 'error'">
         <DialogTitle class="text-[14px] font-semibold">The update didn't work</DialogTitle>
-        <DialogDescription class="selectable line-clamp-4 text-[12px] text-muted-foreground">
+        <DialogDescription class="selectable line-clamp-4 text-[12px] break-words text-muted-foreground">
           {{ update.error }}
         </DialogDescription>
         <div class="flex justify-end gap-2">
           <button type="button" class="btn btn-default" @click="update.sheetOpen = false">Later</button>
-          <button type="button" class="btn btn-primary" @click="update.retry()">Try again</button>
+          <button type="button" class="btn btn-primary" data-autofocus @click="update.retry()">Try again</button>
         </div>
       </template>
 
       <template v-else-if="update.phase === 'ready'">
-        <DialogTitle class="text-[14px] font-semibold">FlashIt {{ update.release?.version }} is ready</DialogTitle>
+        <DialogTitle class="truncate pr-6 text-[14px] font-semibold">FlashIt {{ update.release?.version }} is ready</DialogTitle>
         <DialogDescription class="text-[12px] text-muted-foreground">
           {{ job.isActive ? 'Restart once the drive is finished: restarting now would stop the flash.' : 'Restart FlashIt to start using it.' }}
         </DialogDescription>
         <div class="flex justify-end gap-2">
           <button type="button" class="btn btn-default" @click="update.sheetOpen = false">Later</button>
-          <button type="button" class="btn btn-primary" :disabled="job.isActive" @click="update.restart()">Restart now</button>
+          <button type="button" class="btn btn-primary" data-autofocus :disabled="job.isActive" @click="update.restart()">Restart now</button>
         </div>
       </template>
 
       <template v-else>
         <div>
-          <DialogTitle class="text-[14px] font-semibold">FlashIt {{ update.release?.version }} is available</DialogTitle>
-          <DialogDescription class="text-[12px] text-muted-foreground">
+          <DialogTitle class="truncate pr-6 text-[14px] font-semibold">FlashIt {{ update.release?.version }} is available</DialogTitle>
+          <DialogDescription class="truncate text-[12px] text-muted-foreground">
             You have {{ update.version }}.<template v-if="published"> Released {{ published }}.</template>
           </DialogDescription>
         </div>
@@ -90,7 +103,7 @@ function onNotesClick(e: MouseEvent) {
         </div>
         <div v-else class="flex justify-end gap-2">
           <button type="button" class="btn btn-default" @click="update.sheetOpen = false">Later</button>
-          <button type="button" class="btn btn-primary" @click="update.install()">Download and install</button>
+          <button type="button" class="btn btn-primary" data-autofocus @click="update.install()">Download and install</button>
         </div>
       </template>
     </DialogContent>

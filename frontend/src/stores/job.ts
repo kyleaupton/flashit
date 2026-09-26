@@ -24,6 +24,9 @@ export function phaseName(step: StepState | null | undefined): string {
   return phases[step.key] ?? step.name
 }
 
+// Helper refusals that come before anything is written to the drive.
+const untouchedCodes = new Set(['cancelled', 'not_removable', 'system_disk', 'insufficient_capacity', 'tcc_denied'])
+
 const maxLogLines = 500
 // Weight of the newest sample in the smoothed speed.
 const speedSmoothing = 0.2
@@ -71,6 +74,7 @@ export const useJobStore = defineStore('job', () => {
   // The helper refused before touching the drive because macOS denied
   // FlashIt access to removable volumes; the user can grant it and retry.
   const tccDenied = computed(() => errorCode.value === 'tcc_denied')
+  const driveTouched = computed(() => !(errorCode.value && untouchedCodes.has(errorCode.value)))
   const runningStep = computed(() => steps.value.find((s) => s.status === 'running') ?? null)
   const current = computed(() => (driveId.value ? progress.value[driveId.value] ?? null : null))
 
@@ -303,6 +307,7 @@ export const useJobStore = defineStore('job', () => {
     finishedAt,
     failedAt,
     tccDenied,
+    driveTouched,
     isRunning,
     isComplete,
     isFailed,

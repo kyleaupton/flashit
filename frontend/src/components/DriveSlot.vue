@@ -1,13 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { CircleCheck, TriangleAlert, Unplug, Usb } from 'lucide-vue-next'
+import { CircleCheck, CircleX, Loader2, TriangleAlert, Unplug, Usb } from 'lucide-vue-next'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
-import { useAppStore, useDrivesStore, useSourceStore } from '@/stores'
-import { basename, formatCapacity, formatSize } from '@/lib/utils'
+import { useAppStore, useDrivesStore, useJobStore, useSourceStore } from '@/stores'
+import { basename, driveName, formatCapacity, formatSize } from '@/lib/utils'
 import type { Drive } from '@/types'
 
 const drives = useDrivesStore()
 const source = useSourceStore()
+const job = useJobStore()
 const app = useAppStore()
 
 const open = ref(false)
@@ -16,18 +17,14 @@ const pick = computed(() => drives.selectedPick)
 const list = computed(() => drives.removableDrives)
 const imageSize = computed(() => source.source?.size ?? 0)
 
-function driveName(d: Drive): string {
-  return d.Model || d.Vendor || 'Unnamed drive'
-}
-
 // Volume names from the mountpoints: /Volumes/BACKUP, /media/kyle/BACKUP, E:\.
-function volumes(d: Drive): string {
-  return (d.Mountpoints ?? []).map((m) => basename(m.replace(/[\\/]+$/, '')) || m).join(', ')
+function volumes(d: Drive): string[] {
+  return (d.Mountpoints ?? []).map((m) => basename(m.replace(/[\\/]+$/, '')) || m)
 }
 
 function contents(d: Drive): string {
   const v = volumes(d)
-  return v ? `Contains ${v}` : 'No mounted volumes'
+  return v.length ? `Contains ${v.join(', ')}` : 'No mounted volumes'
 }
 
 function tooSmall(d: Drive): boolean {
@@ -51,6 +48,44 @@ const countLabel = computed(() => {
   if (n === 0) return 'Insert a USB drive'
   return n === 1 ? '1 removable drive connected' : `${n} removable drives connected`
 })
+
+type Tone = 'warn' | 'danger' | 'success' | 'neutral'
+
+// One line at the foot of the slot saying what is about to happen, is
+// happening, or happened to the drive.
+const status = computed((): { tone: Tone; text: string; strong?: string; after?: string; title?: string } | null => {
+  const d = pick.value
+  if (!d) return null
+  const vols = volumes(d)
+  switch (app.state) {
+    case 'running':
+      return { tone: 'neutral', text: job.isAuthorizing ? 'Waiting for approval' : 'Writing…' }
+    case 'done':
+      return { tone: 'success', text: `Now holds ${source.displayName}` }
+    case 'failed':
+    case 'cancelled':
+      if (job.driveTouched) {
+        return { tone: 'danger', text: app.state === 'failed' ? 'Flash failed, not bootable' : 'Stopped, may not be bootable' }
+      }
+  }
+  if (drives.isDisconnected) return { tone: 'neutral', text: 'Disconnected', title: 'Choose the drive again when it is back.' }
+  if (!app.fits) return { tone: 'danger', text: 'Too small for this image', title: `The image is ${formatSize(imageSize.value)}.` }
+  if (!vols.length) return { tone: 'warn', text: 'Erases everything on it' }
+  return {
+    tone: 'warn',
+    text: 'Will erase ',
+    strong: vols[0],
+    after: vols.length > 1 ? ` and ${vols.length - 1} more` : undefined,
+    title: `Will erase ${vols.join(', ')}`,
+  }
+})
+
+const toneClass: Record<Tone, string> = {
+  warn: 'bg-warn-bg text-warn',
+  danger: 'bg-danger-bg text-danger',
+  success: 'bg-success-bg text-success',
+  neutral: 'bg-muted text-muted-foreground',
+}
 </script>
 
 <template>
@@ -61,15 +96,9 @@ const countLabel = computed(() => {
          the same place whatever the slot's height. -->
     <div class="relative flex min-h-0 min-w-0">
       <PopoverAnchor class="pointer-events-none absolute inset-x-0 top-[38px] h-0" />
-      <div
-        v-if="!pick"
-        class="slot-empty"
-        :class="open && 'border-2 border-solid border-primary'"
-      >
+      <div v-if="!pick" class="slot-empty" :class="open && 'border-2 border-solid border-primary'">
         <Usb class="size-7 text-muted-foreground" :stroke-width="1.75" />
-        <button type="button" class="btn btn-default" :disabled="locked" @click="open = !open">
-          Choose drive…
-        </button>
+        <button type="button" class="btn btn-default" :disabled="locked" @click="open = !open">Choose drive…</button>
         <span class="text-[12px] text-muted-foreground">{{ countLabel }}</span>
       </div>
 
@@ -83,51 +112,46 @@ const countLabel = computed(() => {
             <Usb class="size-5 text-muted-foreground" :stroke-width="1.75" />
           </div>
           <div class="min-w-0 flex-1">
-            <div class="truncate text-[14px] font-semibold">{{ driveName(pick) }}</div>
-            <div class="selectable truncate font-mono text-[12px] text-muted-foreground">{{ detail(pick) }}</div>
+            <div class="truncate text-[14px] font-semibold" :title="driveName(pick)">{{ driveName(pick) }}</div>
+            <div class="truncate text-[12px] text-muted-foreground" :title="`${formatCapacity(pick.SizeBytes)} · ${detail(pick)}`">
+              {{ formatCapacity(pick.SizeBytes) }} · <span class="selectable font-mono">{{ detail(pick) }}</span>
+            </div>
           </div>
-          <span class="chip shrink-0">{{ formatCapacity(pick.SizeBytes) }}</span>
         </div>
 
         <div
-          v-if="app.state === 'done'"
-          class="mt-auto flex items-center gap-2 rounded-md bg-success-bg px-2.5 py-2 text-[12px] text-success"
+          v-if="status"
+          class="mt-auto flex min-w-0 items-center gap-2 rounded-md px-2.5 py-2 text-[12px]"
+          :class="toneClass[status.tone]"
+          :title="status.title ?? status.text"
         >
-          <CircleCheck class="size-4 shrink-0" :stroke-width="1.75" />
-          <span class="truncate">Now holds {{ source.displayName }}</span>
-        </div>
-        <div
-          v-else-if="drives.isDisconnected && !app.isRunning"
-          class="mt-auto flex items-center gap-2 rounded-md bg-muted px-2.5 py-2 text-[12px] text-muted-foreground"
-        >
-          <Unplug class="size-4 shrink-0" :stroke-width="1.75" />
-          <span>Disconnected. Choose it again when it is back.</span>
-        </div>
-        <div
-          v-else-if="!app.fits"
-          class="mt-auto flex items-center gap-2 rounded-md bg-danger-bg px-2.5 py-2 text-[12px] text-danger"
-        >
-          <TriangleAlert class="size-4 shrink-0" :stroke-width="1.75" />
-          <span>Too small for this image ({{ formatSize(imageSize) }})</span>
-        </div>
-        <div
-          v-else
-          class="mt-auto flex items-center gap-2 rounded-md bg-warn-bg px-2.5 py-2 text-[12px] text-warn"
-        >
-          <TriangleAlert class="size-4 shrink-0" :stroke-width="1.75" />
-          <span v-if="volumes(pick)" class="truncate">Will erase <b>{{ volumes(pick) }}</b></span>
-          <span v-else class="truncate">Will erase everything on this drive</span>
+          <Loader2 v-if="app.state === 'running'" class="size-4 shrink-0 animate-spin" :stroke-width="1.75" />
+          <CircleCheck v-else-if="status.tone === 'success'" class="size-4 shrink-0" :stroke-width="1.75" />
+          <Unplug v-else-if="drives.isDisconnected && status.tone === 'neutral'" class="size-4 shrink-0" :stroke-width="1.75" />
+          <CircleX v-else-if="status.tone === 'danger' && app.isFinished" class="size-4 shrink-0" :stroke-width="1.75" />
+          <TriangleAlert v-else class="size-4 shrink-0" :stroke-width="1.75" />
+          <span v-if="!status.strong" class="min-w-0 truncate">{{ status.text }}</span>
+          <span v-else class="flex min-w-0 whitespace-pre">
+            <span class="shrink-0">{{ status.text }}</span><b class="min-w-0 truncate">{{ status.strong }}</b><span v-if="status.after" class="shrink-0">{{ status.after }}</span>
+          </span>
         </div>
       </div>
     </div>
 
-    <PopoverContent align="end" side="bottom" :side-offset="0" :collision-padding="8" class="w-[300px] p-1.5" @open-auto-focus.prevent>
+    <PopoverContent
+      align="end"
+      side="bottom"
+      :side-offset="0"
+      :collision-padding="8"
+      class="w-[300px] p-1.5"
+      @open-auto-focus.prevent
+    >
       <div class="flex max-h-[226px] flex-col gap-0.5 overflow-y-auto">
         <button
           v-for="d in list"
           :key="d.Device"
           type="button"
-          class="flex items-start gap-2.5 rounded-lg px-3 py-2.5 text-left enabled:hover:bg-accent disabled:opacity-50"
+          class="flex min-w-0 items-start gap-2.5 rounded-lg px-3 py-2.5 text-left enabled:hover:bg-accent disabled:opacity-50"
           :class="pick?.Device === d.Device && !drives.isDisconnected && 'bg-selected'"
           :disabled="tooSmall(d)"
           @click="choose(d)"
@@ -137,21 +161,26 @@ const countLabel = computed(() => {
             :class="pick?.Device === d.Device && !drives.isDisconnected && 'border-[5px] border-primary'"
           />
           <span class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span class="flex items-center justify-between gap-2">
-              <span class="truncate text-[13px] font-semibold">{{ driveName(d) }}</span>
+            <span class="flex min-w-0 items-center justify-between gap-2">
+              <span class="min-w-0 truncate text-[13px] font-semibold" :title="driveName(d)">{{ driveName(d) }}</span>
               <span class="shrink-0 text-[12px] text-muted-foreground">{{ formatCapacity(d.SizeBytes) }}</span>
             </span>
-            <span class="flex items-center gap-1.5">
-              <span class="truncate font-mono text-[11.5px] text-muted-foreground">{{ detail(d) }}</span>
+            <span class="flex min-w-0 items-center gap-1.5">
+              <span class="min-w-0 truncate font-mono text-[11.5px] text-muted-foreground" :title="detail(d)">{{ detail(d) }}</span>
               <span
                 v-if="drives.isJustConnected(d)"
                 class="shrink-0 rounded-sm bg-primary/15 px-1.5 text-[11px] font-medium text-primary"
               >Just connected</span>
             </span>
-            <span v-if="tooSmall(d)" class="text-[12px] text-muted-foreground">
+            <span v-if="tooSmall(d)" class="truncate text-[12px] text-muted-foreground">
               Too small for this image (needs {{ formatSize(imageSize) }})
             </span>
-            <span v-else class="truncate text-[12px]" :class="d.Mountpoints?.length ? 'text-warn' : 'text-muted-foreground'">
+            <span
+              v-else
+              class="truncate text-[12px]"
+              :class="d.Mountpoints?.length ? 'text-warn' : 'text-muted-foreground'"
+              :title="contents(d)"
+            >
               {{ contents(d) }}
             </span>
           </span>

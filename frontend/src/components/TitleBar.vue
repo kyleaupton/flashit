@@ -45,15 +45,16 @@ const versionLabel = computed(() => (update.version ? `FlashIt ${update.version}
     >
       FlashIt
     </span>
-    <div class="ml-auto flex items-center gap-1.5">
+    <div class="ml-auto flex min-w-0 items-center gap-1.5">
       <button
         v-if="showPill"
         type="button"
-        class="no-drag flex h-6 items-center gap-1 rounded-full bg-primary px-2.5 text-[12px] font-medium text-primary-foreground hover:brightness-110"
+        class="no-drag flex h-6 max-w-[180px] min-w-0 items-center gap-1 rounded-full bg-primary px-2.5 text-[12px] font-medium text-primary-foreground hover:brightness-110"
+        :title="`Update to ${update.release?.version}`"
         @click="update.checkNow()"
       >
-        <ArrowUpCircle class="size-3.5" />
-        Update to {{ update.release?.version }}
+        <ArrowUpCircle class="size-3.5 shrink-0" />
+        <span class="truncate">Update to {{ update.release?.version }}</span>
       </button>
       <DropdownMenu v-model:open="menuOpen">
         <DropdownMenuTrigger as-child>
@@ -70,11 +71,11 @@ const versionLabel = computed(() => (update.version ? `FlashIt ${update.version}
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" class="w-[220px] text-[13px]">
-          <DropdownMenuLabel class="font-normal text-[12px] text-muted-foreground">
+          <DropdownMenuLabel class="truncate font-normal text-[12px] text-muted-foreground" :title="versionLabel">
             {{ versionLabel }}
           </DropdownMenuLabel>
           <DropdownMenuItem v-if="update.enabled" @select.prevent="update.checkNow()">
-            {{ update.available ? `Update to ${update.release?.version}…` : 'Check for updates…' }}
+            <span class="min-w-0 truncate">{{ update.available ? `Update to ${update.release?.version}…` : 'Check for updates…' }}</span>
             <Loader2 v-if="update.phase === 'checking'" class="ml-auto animate-spin" />
           </DropdownMenuItem>
           <DropdownMenuItem v-else @select="Browser.OpenURL(releasesURL)">Releases page</DropdownMenuItem>
