@@ -25,6 +25,8 @@ type Plan struct {
 	Runnable  Runnable       `json:"-"`
 	StepInfos []StepInfo     `json:"stepInfos"`
 	Meta      map[string]any `json:"meta,omitempty"`
+	// Drive names the target for the quit prompt.
+	Drive string `json:"-"`
 }
 
 // Runnable is a type-erased interface for executing typed pipelines.

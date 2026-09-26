@@ -41,17 +41,25 @@ type JobsService struct {
 	installers map[sources.Kind]core.Installer
 }
 
-func NewJobsService() *JobsService {
-	svc := &JobsService{
+// NewJobsService takes nil to make its own manager.
+func NewJobsService(mgr *jobs.Manager) *JobsService {
+	if mgr == nil {
+		mgr = NewJobManager()
+	}
+	return &JobsService{
+		mgr: mgr,
 		installers: map[sources.Kind]core.Installer{
 			sources.LinuxISO:   linux.Linux{},
 			sources.WindowsISO: windows.Windows{},
 		},
 	}
-	svc.mgr = jobs.NewManager(func(ev core.Event) {
+}
+
+// NewJobManager returns a manager that sends job events to the frontend.
+func NewJobManager() *jobs.Manager {
+	return jobs.NewManager(func(ev core.Event) {
 		eventbus.Emit("job:event", ev)
 	})
-	return svc
 }
 
 // StartJob probes the source, picks the installer by what it found, and
@@ -94,6 +102,10 @@ func (s *JobsService) StartJob(ctx context.Context, req StartJobRequest) (StartJ
 	plan, err := inst.Plan(ctx, src, drive)
 	if err != nil {
 		return StartJobResponse{}, err
+	}
+	plan.Drive = drive.Model
+	if plan.Drive == "" {
+		plan.Drive = drive.Device
 	}
 	// Use background context for the job - the request context gets cancelled
 	// when the RPC call returns, but the job runs asynchronously

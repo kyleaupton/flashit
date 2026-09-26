@@ -5,7 +5,8 @@ import (
 	"path/filepath"
 )
 
-// Dir is where log files go: %LOCALAPPDATA%\FlashIt\logs on Windows.
+// Dir is where log files go: %LOCALAPPDATA%\FlashIt\logs on Windows,
+// ~/Library/Caches/FlashIt/logs on macOS, ~/.cache/FlashIt/logs on Linux.
 func Dir() (string, error) {
 	base, err := os.UserCacheDir()
 	if err != nil {

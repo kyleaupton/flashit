@@ -39,7 +39,7 @@ func TestStartJob_RefusesChangedDrive(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			req := seen
 			change(&req)
-			_, err := NewJobsService().StartJob(context.Background(), req)
+			_, err := NewJobsService(nil).StartJob(context.Background(), req)
 			if !errors.Is(err, ErrDriveChanged) {
 				t.Fatalf("StartJob = %v, want ErrDriveChanged", err)
 			}
@@ -49,7 +49,7 @@ func TestStartJob_RefusesChangedDrive(t *testing.T) {
 	t.Run("unlisted", func(t *testing.T) {
 		req := seen
 		req.DriveID = "/dev/disk5"
-		if _, err := NewJobsService().StartJob(context.Background(), req); err == nil || errors.Is(err, ErrDriveChanged) {
+		if _, err := NewJobsService(nil).StartJob(context.Background(), req); err == nil || errors.Is(err, ErrDriveChanged) {
 			t.Fatalf("StartJob = %v, want a not-removable refusal", err)
 		}
 	})

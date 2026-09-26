@@ -37,6 +37,7 @@ func main() {
 		drives.SetProvider(drives.MockProvider{Drives: drives.DefaultMockDrives()})
 	}
 
+	var guard *quitGuard
 	app := application.New(application.Options{
 		Name:        "FlashIt",
 		Description: "Create bootable USB OS installers",
@@ -48,6 +49,7 @@ func main() {
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		ShouldQuit: func() bool { return guard.shouldQuit() },
 		// Also the Wayland app_id, which is how the shell matches the window
 		// to dev.kyleupton.flashit.desktop and its icon.
 		Linux: application.LinuxOptions{
@@ -62,35 +64,54 @@ func main() {
 	// Set global event emitter for backend modules
 	eventbus.SetEmitter(func(name string, data any) { app.Event.Emit(name, data) })
 
-	app.RegisterService(application.NewService(service.NewJobsService()))
+	mgr := service.NewJobManager()
+	app.RegisterService(application.NewService(service.NewJobsService(mgr)))
 	app.RegisterService(application.NewService(service.NewDrivesService()))
 	app.RegisterService(application.NewService(service.NewPrivService()))
 	app.RegisterService(application.NewService(service.NewSourcesService()))
 
-	var checkUpdates func()
+	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title:          "FlashIt",
+		Width:          600,
+		Height:         400,
+		DisableResize:  true,
+		EnableFileDrop: true,
+		Mac: application.MacWindow{
+			TitleBar: application.MacTitleBarHiddenInset,
+		},
+		KeyBindings: quitKeyBinding(app),
+		URL:         "/",
+	})
+
+	guard = &quitGuard{app: app, window: window, jobs: mgr}
+	app.RegisterService(application.NewService(service.NewAppService(
+		func() { app.Quit() },
+		func() { app.Menu.ShowAbout() },
+		func(path string) error { return app.Env.OpenFileManager(path, false) },
+	)))
+	window.RegisterHook(events.Common.WindowClosing, guard.onClose)
+
+	var up *updater.Updater
 	if updaterEnabled(runtime.GOOS, Version) {
 		if err := setupUpdater(app); err != nil {
 			logger.Error("updater disabled", "error", err)
 		} else {
-			checkUpdates = func() { checkAndInstall(app) }
+			up = app.Updater
 		}
 	}
-	app.RegisterService(application.NewService(service.NewUpdaterService(Version, checkUpdates)))
-
-	window := app.Window.NewWithOptions(application.WebviewWindowOptions{
-		Title:          "FlashIt",
-		Width:          800,
-		Height:         500,
-		DisableResize:  true,
-		EnableFileDrop: true,
-		Mac: application.MacWindow{
-			InvisibleTitleBarHeight: 50,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHiddenInset,
-		},
-		BackgroundColour: application.NewRGB(27, 38, 54),
-		URL:              "/",
-	})
+	updates := service.NewUpdaterService(Version, up, mgr.Active)
+	app.RegisterService(application.NewService(updates))
+	if up != nil {
+		if runtime.GOOS == "darwin" {
+			app.Menu.Set(macMenu(app, window))
+		}
+		go func() {
+			time.Sleep(5 * time.Second)
+			if _, err := updates.Check(app.Context()); err != nil {
+				logger.Error("update check failed", "error", err)
+			}
+		}()
+	}
 
 	// Wails delivers dropped files to Go listeners only; the frontend gets
 	// them through this relay.
@@ -112,6 +133,8 @@ func updaterEnabled(goos, version string) bool {
 	return (goos == "darwin" || goos == "windows") && releaseVersion.MatchString(version)
 }
 
+// setupUpdater runs the updater headless: the main window draws every state
+// from its events.
 func setupUpdater(app *application.App) error {
 	gh, err := github.New(github.Config{
 		Repository:    "kyleaupton/flashit",
@@ -120,45 +143,23 @@ func setupUpdater(app *application.App) error {
 	if err != nil {
 		return err
 	}
-	if err := app.Updater.Init(updater.Config{
+	return app.Updater.Init(updater.Config{
 		CurrentVersion: Version,
 		Providers:      []updater.Provider{gh},
-	}); err != nil {
-		return err
-	}
-	if runtime.GOOS == "darwin" {
-		app.Menu.Set(macMenu(app))
-	}
-
-	// Check silently first: CheckAndInstall opens its window even when there
-	// is nothing to install.
-	go func() {
-		time.Sleep(5 * time.Second)
-		rel, err := app.Updater.Check(app.Context())
-		if err != nil {
-			logger.Error("update check failed", "error", err)
-			return
-		}
-		if rel != nil {
-			checkAndInstall(app)
-		}
-	}()
-	return nil
+		Window:         updater.WindowNone,
+	})
 }
 
-func checkAndInstall(app *application.App) {
-	if err := app.Updater.CheckAndInstall(app.Context()); err != nil {
-		logger.Error("update failed", "error", err)
-	}
-}
-
-// macMenu is the default menu with Check for Updates… in the app menu.
-func macMenu(app *application.App) *application.Menu {
+// macMenu is the default menu with Check for Updates… in the app menu. The
+// item hands over to the window's own check, which opens the update sheet.
+func macMenu(app *application.App, window *application.WebviewWindow) *application.Menu {
 	menu := app.NewMenu()
 	appMenu := menu.AddSubmenu("FlashIt")
 	appMenu.AddRole(application.About)
 	appMenu.Add("Check for Updates…").OnClick(func(*application.Context) {
-		go checkAndInstall(app)
+		window.Show()
+		window.Focus()
+		app.Event.Emit("updater:check-requested")
 	})
 	appMenu.AddSeparator()
 	appMenu.AddRole(application.ServicesMenu)

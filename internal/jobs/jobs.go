@@ -101,6 +101,18 @@ func (m *Manager) CancelActive() <-chan struct{} {
 	return done
 }
 
+// ActivePlan is the plan of the pending or running job, or nil.
+func (m *Manager) ActivePlan() *core.Plan {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, j := range m.jobs {
+		if j.Status == StatusPending || j.Status == StatusRunning {
+			return j.Plan
+		}
+	}
+	return nil
+}
+
 // Active reports whether a job is pending or running.
 func (m *Manager) Active() bool {
 	m.mu.Lock()
